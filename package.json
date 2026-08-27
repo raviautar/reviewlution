@@ -1,0 +1,27 @@
+{
+  "name": "washi-review",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted review shell: proxies the studio preview and overlays washi comment pins on it.",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@fastify/http-proxy": "^11.1.2",
+    "@fastify/static": "^8.0.4",
+    "@washi-ui/core": "1.0.2",
+    "@washi-ui/react": "1.0.3",
+    "fastify": "^5.2.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}
