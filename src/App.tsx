@@ -108,6 +108,8 @@ function PinLayer({
       if (!doc) return;
       const next: PinPos[] = [];
       comments.forEach((c, i) => {
+        // Resolved comments live in the sidebar's Resolved tab, not on the page.
+        if (c.resolved) return;
         let pos: { x: number; y: number } | null = null;
         if (c.anchor) {
           pos = resolveAnchor(doc, c.anchor, cache.current, c.id);
@@ -674,10 +676,39 @@ function Sidebar({
   onClose: () => void;
 }) {
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
+  const [tab, setTab] = useState<'open' | 'resolved'>('open');
+
+  // Numbering stays global (matches the pins); the tabs only filter the view.
+  const numbered = comments.map((c, i) => ({ c, n: i + 1 }));
+  const shown = numbered.filter(({ c }) => (tab === 'resolved' ? c.resolved : !c.resolved));
+  const openCount = numbered.length - numbered.filter(({ c }) => c.resolved).length;
 
   useEffect(() => {
-    if (focusId) cardRefs.current.get(focusId)?.scrollIntoView({ block: 'center' });
-  }, [focusId]);
+    if (!focusId) return;
+    const target = comments.find((c) => c.id === focusId);
+    if (target?.resolved) setTab('resolved');
+    cardRefs.current.get(focusId)?.scrollIntoView({ block: 'center' });
+  }, [focusId, comments]);
+
+  const tabBtn = (key: 'open' | 'resolved', label: string) => (
+    <button
+      type="button"
+      onClick={() => setTab(key)}
+      style={{
+        border: 'none',
+        background: 'transparent',
+        padding: '9px 2px',
+        marginRight: 16,
+        fontSize: 12.5,
+        fontWeight: 600,
+        cursor: 'pointer',
+        color: tab === key ? '#1b1926' : '#8a879a',
+        borderBottom: `2px solid ${tab === key ? ACCENT : 'transparent'}`,
+      }}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <aside
@@ -702,12 +733,11 @@ function Sidebar({
           display: 'flex',
           alignItems: 'center',
           gap: 8,
-          padding: '13px 16px',
-          borderBottom: '1px solid #eeedf3',
+          padding: '13px 16px 0',
         }}
       >
         <b style={{ fontSize: 13.5, color: '#1b1926' }}>Comments</b>
-        <span style={{ fontSize: 11, color: '#8a879a' }}>{comments.length} across all pages</span>
+        <span style={{ fontSize: 11, color: '#8a879a' }}>across all pages</span>
         <button
           type="button"
           onClick={onClose}
@@ -724,13 +754,19 @@ function Sidebar({
           <CloseIcon size={13} />
         </button>
       </div>
+      <div style={{ padding: '0 16px', borderBottom: '1px solid #eeedf3' }}>
+        {tabBtn('open', `Open (${openCount})`)}
+        {tabBtn('resolved', `Resolved (${numbered.length - openCount})`)}
+      </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px 90px' }}>
-        {comments.length === 0 && (
+        {shown.length === 0 && (
           <p style={{ padding: '26px 10px', fontSize: 12.5, color: '#8a879a', textAlign: 'center' }}>
-            No comments yet. Use the pencil (or press C), then click any element.
+            {tab === 'open'
+              ? 'No open comments. Use the pencil (or press C), then click any element.'
+              : 'Nothing resolved yet.'}
           </p>
         )}
-        {comments.map((c, i) => (
+        {shown.map(({ c, n: i }) => (
           <div
             key={c.id}
             ref={(el) => {
@@ -764,7 +800,7 @@ function Sidebar({
                   justifyContent: 'center',
                 }}
               >
-                {i + 1}
+                {i}
               </span>
               <b style={{ fontSize: 12.5, color: '#1b1926' }}>{c.author ?? me}</b>
               <span style={{ fontSize: 11, color: '#8a879a' }}>{timeAgo(c.createdAt)}</span>

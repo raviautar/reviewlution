@@ -61,7 +61,9 @@ app.addHook('onRequest', async (req, reply) => {
   if (req.method !== 'GET' || !isDocument) return;
   if (req.url.startsWith('/__review')) return;
   shellHtml ??= await readFile(join(here, 'dist', 'index.html'), 'utf8');
-  reply.type('text/html; charset=utf-8').send(shellHtml);
+  // A cached shell would keep an old bundle running after a redeploy — the
+  // hashed assets may cache forever, the document itself must not.
+  reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').send(shellHtml);
 });
 
 app.addContentTypeParser(
