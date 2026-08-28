@@ -389,7 +389,7 @@ function Bubble({
       )}
       <button
         type="button"
-        title={annotate ? 'Stop commenting (C)' : 'Comment: click any element (C)'}
+        title={annotate ? 'Stop commenting' : 'Comment: click any element'}
         aria-label={annotate ? 'Exit annotate mode' : 'Enter annotate mode'}
         onClick={onToggleMode}
         style={{
@@ -662,6 +662,7 @@ function Sidebar({
   onEdit,
   onResolve,
   onDelete,
+  onClearResolved,
   onClose,
 }: {
   me: string;
@@ -673,10 +674,12 @@ function Sidebar({
   onEdit: (c: ReviewComment, patch: { text: string; images?: string[] }) => void;
   onResolve: (c: ReviewComment) => void;
   onDelete: (c: ReviewComment) => void;
+  onClearResolved: () => void;
   onClose: () => void;
 }) {
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const [tab, setTab] = useState<'open' | 'resolved'>('open');
+  const [confirmClear, setConfirmClear] = useState(false);
 
   // Numbering stays global (matches the pins); the tabs only filter the view.
   const numbered = comments.map((c, i) => ({ c, n: i + 1 }));
@@ -754,15 +757,52 @@ function Sidebar({
           <CloseIcon size={13} />
         </button>
       </div>
-      <div style={{ padding: '0 16px', borderBottom: '1px solid #eeedf3' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 16px',
+          borderBottom: '1px solid #eeedf3',
+        }}
+      >
         {tabBtn('open', `Open (${openCount})`)}
         {tabBtn('resolved', `Resolved (${numbered.length - openCount})`)}
+        {tab === 'resolved' && numbered.length - openCount > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              if (!confirmClear) {
+                setConfirmClear(true);
+                return;
+              }
+              setConfirmClear(false);
+              onClearResolved();
+            }}
+            onMouseLeave={() => setConfirmClear(false)}
+            style={{
+              marginLeft: 'auto',
+              border: `1px solid ${confirmClear ? '#b3261e' : '#e2e0ea'}`,
+              background: confirmClear ? '#fbe9e7' : '#fff',
+              color: '#b3261e',
+              borderRadius: 8,
+              height: 26,
+              padding: '0 10px',
+              fontSize: 11.5,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            {confirmClear
+              ? `Really delete ${numbered.length - openCount}?`
+              : 'Delete all resolved'}
+          </button>
+        )}
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px 90px' }}>
         {shown.length === 0 && (
           <p style={{ padding: '26px 10px', fontSize: 12.5, color: '#8a879a', textAlign: 'center' }}>
             {tab === 'open'
-              ? 'No open comments. Use the pencil (or press C), then click any element.'
+              ? 'No open comments. Use the pencil, then click any element.'
               : 'Nothing resolved yet.'}
           </p>
         )}
@@ -1175,12 +1215,11 @@ export function App() {
     });
   }, []);
 
-  // "C" toggles annotate everywhere — the shell and inside the iframe.
+  // Escape leaves annotate mode everywhere — the shell and inside the iframe.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (isTypingTarget(e.target)) return;
-      if (e.key === 'c' || e.key === 'C') toggleMode();
       if (e.key === 'Escape') {
         setPending(null);
         setMode('view');
@@ -1211,7 +1250,7 @@ export function App() {
         /* gone with the frame */
       }
     };
-  }, [toggleMode]);
+  }, []);
 
   // Mirror the iframe's SPA route onto the address bar.
   useEffect(() => {
@@ -1282,6 +1321,12 @@ export function App() {
     },
     [refresh],
   );
+  const clearResolved = useCallback(async () => {
+    for (const c of comments.filter((x) => x.resolved)) {
+      await deleteComment(c.id);
+    }
+    await refresh();
+  }, [comments, refresh]);
   const remove = useCallback(
     async (c: ReviewComment) => {
       await deleteComment(c.id);
@@ -1342,6 +1387,7 @@ export function App() {
           onEdit={(c, patch) => void edit(c, patch)}
           onResolve={(c) => void resolve(c)}
           onDelete={(c) => void remove(c)}
+          onClearResolved={() => void clearResolved()}
           onClose={() => {
             setSidebarOpen(false);
             setFocusId(null);
