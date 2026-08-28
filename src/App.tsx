@@ -389,7 +389,7 @@ function Bubble({
       )}
       <button
         type="button"
-        title={annotate ? 'Stop commenting' : 'Comment: click any element'}
+        title={annotate ? 'Stop commenting (⌥C)' : 'Comment: click any element (⌥C)'}
         aria-label={annotate ? 'Exit annotate mode' : 'Enter annotate mode'}
         onClick={onToggleMode}
         style={{
@@ -1213,9 +1213,16 @@ export function App() {
     });
   }, []);
 
-  // Escape leaves annotate mode everywhere — the shell and inside the iframe.
+  // ⌥C toggles annotate mode, Escape leaves it — shell and iframe alike. A
+  // chord instead of a bare letter: plain typing or a stray keypress while
+  // browsing can never trigger it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === 'KeyC') {
+        e.preventDefault();
+        toggleMode();
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (isTypingTarget(e.target)) return;
       if (e.key === 'Escape') {
@@ -1248,7 +1255,7 @@ export function App() {
         /* gone with the frame */
       }
     };
-  }, []);
+  }, [toggleMode]);
 
   // Mirror the iframe's SPA route onto the address bar.
   useEffect(() => {
