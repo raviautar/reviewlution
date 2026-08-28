@@ -792,9 +792,7 @@ function Sidebar({
               cursor: 'pointer',
             }}
           >
-            {confirmClear
-              ? `Really delete ${numbered.length - openCount}?`
-              : 'Delete all resolved'}
+            {confirmClear ? `Really delete ${numbered.length - openCount}?` : 'Delete all resolved'}
           </button>
         )}
       </div>
