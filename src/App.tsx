@@ -402,7 +402,7 @@ function Bubble({
       </button>
       <button
         type="button"
-        title="All comments"
+        title="All comments (⌥L)"
         aria-label="Toggle comments sidebar"
         onClick={onToggleSidebar}
         style={{ ...bubbleBtn, background: sidebarOpen ? '#efedf7' : 'transparent' }}
@@ -1213,14 +1213,19 @@ export function App() {
     });
   }, []);
 
-  // ⌥C toggles annotate mode, Escape leaves it — shell and iframe alike. A
-  // chord instead of a bare letter: plain typing or a stray keypress while
-  // browsing can never trigger it.
+  // ⌥C toggles annotate mode, ⌥L the comment list, Escape leaves annotate —
+  // shell and iframe alike. Chords instead of bare letters: plain typing or a
+  // stray keypress while browsing can never trigger them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === 'KeyC') {
         e.preventDefault();
         toggleMode();
+        return;
+      }
+      if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === 'KeyL') {
+        e.preventDefault();
+        setSidebarOpen((o) => !o);
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
