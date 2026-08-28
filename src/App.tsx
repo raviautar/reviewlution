@@ -1,133 +1,239 @@
 /**
  * Review shell: the studio preview in a same-origin iframe (the server proxies
- * it), washi's pin engine on top, comments stored on this host.
+ * it), our own element-anchored pin layer on top, comments stored on this host.
  *
- * The shell is URL-transparent: the server hands this page out for any
- * document navigation, the iframe loads the same path, and SPA navigation
- * inside the iframe is mirrored back with replaceState — so the address bar
- * reads like the app's own, never /__review.
- *
- * Washi has no page concept — one mount renders every loaded comment — so the
- * adapter scopes comments by the iframe's route, and a route change remounts
- * the whole washi tree (keyed provider). The remount reloads the iframe at the
- * new route; the trade is a page refresh per navigation for pins that always
- * belong to the page under them.
- *
- * The bubble and both dialogs are this shell's own (washi's packaged ones have
- * no drag, no name, no images): a draggable bubble carrying the reviewer name,
- * a create popover that takes pasted or attached images, and a sidebar that a
- * pin click opens and scrolls.
+ * The shell is URL-transparent: the server hands this page out for any document
+ * navigation, the iframe loads the same path, and SPA navigation inside the
+ * iframe is mirrored back with replaceState — the address bar never shows
+ * /__review. The iframe is never remounted; pins belong to elements, not to
+ * scroll positions, so each frame their positions are read from the anchored
+ * element's live bounding box. A pin whose element is not on the current DOM
+ * simply has no dot — its comment stays in the sidebar, which always lists
+ * every page's comments.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  CommentList,
-  WashiFrame,
-  WashiProvider,
-  useWashiContext,
-  type Comment,
-  type WashiAdapter,
-} from '@washi-ui/react';
+  ACCENT,
+  AUTHOR_KEY,
+  DRAFT_KEY,
+  POS_KEY,
+  bodyOf,
+  createComment,
+  deleteComment,
+  listComments,
+  patchComment,
+  storedName,
+  timeAgo,
+  uploadImage,
+  type ReviewComment,
+} from './api.js';
+import { anchorAt, resolveAnchor, type Anchor } from './anchors.js';
+import { ChatIcon, CloseIcon, GripIcon, ImagePlusIcon, PencilIcon } from './icons.js';
 
-const ACCENT = '#5b2fcc';
-const AUTHOR_KEY = 'washi-review-author';
-const POS_KEY = 'washi-review-bubble-pos';
-const API = '/__review/api/comments';
-const IMAGES_API = '/__review/api/images';
+type Mode = 'view' | 'annotate';
+type Draft = { text: string; images: string[] };
+type Pending = { anchor: Anchor | null; x: number; y: number; cx: number; cy: number };
 
-/** A comment as this shell stores it — washi's shape plus attribution. */
-type ReviewComment = Comment & { author?: string; page?: string; images?: string[] };
+const EMPTY_DRAFT: Draft = { text: '', images: [] };
 
-function storedName(): string | null {
+function storedDraft(): Draft {
   try {
-    return localStorage.getItem(AUTHOR_KEY);
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return EMPTY_DRAFT;
+    const d = JSON.parse(raw) as Draft;
+    return typeof d.text === 'string' && Array.isArray(d.images) ? d : EMPTY_DRAFT;
   } catch {
-    return null;
+    return EMPTY_DRAFT;
   }
 }
 
-class RestAdapter implements WashiAdapter {
-  constructor(private readonly page: string) {}
-
-  async save(c: Comment): Promise<void> {
-    const author = storedName() ?? 'Anonymous';
-    const res = await fetch(API, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...c, page: this.page, author }),
-    });
-    if (!res.ok) throw new Error(`Saving the comment failed (${res.status})`);
-  }
-
-  async load(): Promise<Comment[]> {
-    const res = await fetch(`${API}?page=${encodeURIComponent(this.page)}`);
-    if (!res.ok) throw new Error(`Loading comments failed (${res.status})`);
-    return (await res.json()) as Comment[];
-  }
-
-  async update(id: string, updates: Partial<Comment>): Promise<void> {
-    const res = await fetch(`${API}/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
-    if (!res.ok) throw new Error(`Updating the comment failed (${res.status})`);
-  }
-
-  async delete(id: string): Promise<void> {
-    const res = await fetch(`${API}/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(`Deleting the comment failed (${res.status})`);
+function persistDraft(d: Draft) {
+  try {
+    if (!d.text && d.images.length === 0) localStorage.removeItem(DRAFT_KEY);
+    else localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+  } catch {
+    /* draft just won't survive a reload */
   }
 }
 
-/** Author of a comment; a comment without the field was just created here. */
-function authorOf(c: ReviewComment, me: string): string {
-  return c.author ?? me;
+/** The route this page was opened on; /__review itself falls back to the hub. */
+function initialRoute(): string {
+  const path = location.pathname + location.search;
+  if (path === '/' || path.startsWith('/__review')) return '/integrations';
+  return path;
 }
 
-/** Older comments carried the author as a trailing "— name" line; strip it. */
-function bodyOf(c: ReviewComment): string {
-  return c.author ? c.text.replace(new RegExp(`\\n— ${escapeRegExp(c.author)}$`), '') : c.text;
+function isTypingTarget(t: EventTarget | null): boolean {
+  if (!(t instanceof Element)) return false;
+  const tag = t.tagName;
+  return (
+    tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t as HTMLElement).isContentEditable
+  );
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+/* ---------------------------------------------------------------- pin layer */
 
-function timeAgo(at: number): string {
-  const mins = Math.round((Date.now() - at) / 60_000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
+type PinPos = { id: string; n: number; x: number; y: number; resolved: boolean };
 
-async function uploadImage(file: File): Promise<string> {
-  const res = await fetch(IMAGES_API, {
-    method: 'POST',
-    headers: { 'content-type': file.type },
-    body: file,
-  });
-  if (!res.ok) throw new Error(`Uploading the image failed (${res.status})`);
-  return ((await res.json()) as { url: string }).url;
-}
+function PinLayer({
+  iframeRef,
+  comments,
+  route,
+  mode,
+  pending,
+  hoverId,
+  onPlace,
+  onPinClick,
+}: {
+  iframeRef: React.RefObject<HTMLIFrameElement | null>;
+  comments: ReviewComment[];
+  route: string;
+  mode: Mode;
+  pending: Pending | null;
+  hoverId: string | null;
+  onPlace: (p: Pending) => void;
+  onPinClick: (id: string) => void;
+}) {
+  const [pins, setPins] = useState<PinPos[]>([]);
+  const [pendingPos, setPendingPos] = useState<{ x: number; y: number } | null>(null);
+  const cache = useRef(new Map<string, Element>());
 
-/** Watches the (same-origin) iframe for SPA navigation and reports the route. */
-function RouteWatcher({ onRoute }: { onRoute: (route: string) => void }) {
-  const { iframeEl } = useWashiContext();
+  // Positions are read from the live DOM every frame — this is what glues a
+  // dot to its element through scrolling, layout shifts and SPA re-renders.
   useEffect(() => {
-    if (!iframeEl) return;
-    const tick = setInterval(() => {
-      try {
-        const loc = iframeEl.contentWindow?.location;
-        if (loc?.pathname) onRoute(loc.pathname + loc.search);
-      } catch {
-        /* not ready yet */
+    let raf = 0;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) return;
+      const next: PinPos[] = [];
+      comments.forEach((c, i) => {
+        let pos: { x: number; y: number } | null = null;
+        if (c.anchor) {
+          pos = resolveAnchor(doc, c.anchor, cache.current, c.id);
+        } else if (c.page === route) {
+          pos = { x: (c.x / 100) * window.innerWidth, y: (c.y / 100) * window.innerHeight };
+        }
+        if (!pos) return;
+        if (pos.y < -20 || pos.y > window.innerHeight + 20) return;
+        next.push({ id: c.id, n: i + 1, x: pos.x, y: pos.y, resolved: !!c.resolved });
+      });
+      setPins((cur) => {
+        if (
+          cur.length === next.length &&
+          cur.every((p, i) => {
+            const q = next[i];
+            return (
+              q &&
+              p.id === q.id &&
+              Math.abs(p.x - q.x) < 0.5 &&
+              Math.abs(p.y - q.y) < 0.5 &&
+              p.resolved === q.resolved
+            );
+          })
+        ) {
+          return cur;
+        }
+        return next;
+      });
+      if (pending) {
+        const pos = pending.anchor
+          ? resolveAnchor(doc, pending.anchor, cache.current, '__pending')
+          : { x: (pending.x / 100) * window.innerWidth, y: (pending.y / 100) * window.innerHeight };
+        setPendingPos((cur) =>
+          pos && (!cur || Math.abs(cur.x - pos.x) > 0.5 || Math.abs(cur.y - pos.y) > 0.5)
+            ? pos
+            : pos
+              ? cur
+              : null,
+        );
+      } else {
+        setPendingPos(null);
       }
-    }, 600);
-    return () => clearInterval(tick);
-  }, [iframeEl, onRoute]);
-  return null;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [iframeRef, comments, route, pending]);
+
+  const place = (e: React.MouseEvent) => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+    cache.current.delete('__pending');
+    onPlace({
+      anchor: anchorAt(doc, e.clientX, e.clientY),
+      x: (e.clientX / window.innerWidth) * 100,
+      y: (e.clientY / window.innerHeight) * 100,
+      cx: e.clientX,
+      cy: e.clientY,
+    });
+  };
+
+  return (
+    <div
+      onClick={mode === 'annotate' ? place : undefined}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 2147482800,
+        pointerEvents: mode === 'annotate' ? 'auto' : 'none',
+        cursor: mode === 'annotate' ? 'crosshair' : undefined,
+      }}
+    >
+      {pins.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          title="Open this comment"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPinClick(p.id);
+          }}
+          style={{
+            position: 'absolute',
+            left: p.x - 11,
+            top: p.y - 11,
+            width: 22,
+            height: 22,
+            borderRadius: '50% 50% 50% 4px',
+            border: '2px solid #fff',
+            background: ACCENT,
+            color: '#fff',
+            fontSize: 10,
+            fontWeight: 700,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            pointerEvents: 'auto',
+            padding: 0,
+            opacity: p.resolved ? 0.45 : 1,
+            boxShadow:
+              hoverId === p.id
+                ? `0 0 0 3px ${ACCENT}55, 0 4px 10px -4px rgba(20,20,30,.5)`
+                : '0 4px 10px -4px rgba(20,20,30,.5)',
+          }}
+        >
+          {p.n}
+        </button>
+      ))}
+      {pendingPos && (
+        <span
+          style={{
+            position: 'absolute',
+            left: pendingPos.x - 11,
+            top: pendingPos.y - 11,
+            width: 22,
+            height: 22,
+            borderRadius: '50% 50% 50% 4px',
+            border: '2px dashed #fff',
+            background: `${ACCENT}cc`,
+            boxShadow: '0 4px 10px -4px rgba(20,20,30,.5)',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
 /* -------------------------------------------------------------- the bubble */
@@ -155,31 +261,36 @@ function clampPos(p: Pos, w: number, h: number): Pos {
 const bubbleBtn = {
   border: 'none',
   background: 'transparent',
-  color: '#fff',
-  width: 34,
-  height: 34,
-  borderRadius: 17,
+  color: '#4a4760',
+  width: 32,
+  height: 32,
+  borderRadius: 16,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   cursor: 'pointer',
-  fontSize: 15,
   flex: 'none',
+  position: 'relative',
 } as const;
 
-/** Drag-anywhere bubble: grip, reviewer name, pencil toggle, comment count. */
+/** Minimal white toolbar: grip, reviewer name, pencil toggle, comment count. */
 function Bubble({
   author,
+  mode,
+  count,
   sidebarOpen,
+  onToggleMode,
   onChangeName,
   onToggleSidebar,
 }: {
   author: string | null;
+  mode: Mode;
+  count: number;
   sidebarOpen: boolean;
+  onToggleMode: () => void;
   onChangeName: () => void;
   onToggleSidebar: () => void;
 }) {
-  const { mode, setMode, comments, isReady } = useWashiContext();
   const [pos, setPos] = useState<Pos | null>(storedPos);
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<{ dx: number; dy: number } | null>(null);
@@ -229,9 +340,10 @@ function Bubble({
         alignItems: 'center',
         gap: 2,
         padding: 4,
-        borderRadius: 22,
-        background: 'rgba(23,21,31,.94)',
-        boxShadow: '0 10px 30px -12px rgba(20,20,30,.6)',
+        borderRadius: 21,
+        background: '#fff',
+        border: '1px solid #e5e3ee',
+        boxShadow: '0 10px 30px -12px rgba(20,20,30,.35)',
         zIndex: 2147483000,
         userSelect: 'none',
       }}
@@ -244,19 +356,17 @@ function Bubble({
         onPointerMove={onGripMove}
         onPointerUp={onGripUp}
         style={{
-          width: 22,
-          height: 34,
+          width: 20,
+          height: 32,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          color: 'rgba(255,255,255,.45)',
+          color: '#b6b3c4',
           cursor: 'grab',
-          fontSize: 13,
-          letterSpacing: 1,
           touchAction: 'none',
         }}
       >
-        ⋮⋮
+        <GripIcon />
       </span>
       {author && (
         <button
@@ -269,7 +379,7 @@ function Bubble({
             padding: '0 10px',
             fontSize: 12,
             fontWeight: 600,
-            color: 'rgba(255,255,255,.85)',
+            color: '#6b6880',
           }}
         >
           {author}
@@ -277,31 +387,31 @@ function Bubble({
       )}
       <button
         type="button"
-        title={annotate ? 'Stop commenting' : 'Comment: click anywhere on the page'}
+        title={annotate ? 'Stop commenting (C)' : 'Comment: click any element (C)'}
         aria-label={annotate ? 'Exit annotate mode' : 'Enter annotate mode'}
-        disabled={!isReady}
-        onClick={() => setMode(annotate ? 'view' : 'annotate')}
+        onClick={onToggleMode}
         style={{
           ...bubbleBtn,
           background: annotate ? ACCENT : 'transparent',
-          opacity: isReady ? 1 : 0.4,
+          color: annotate ? '#fff' : '#4a4760',
         }}
       >
-        ✎
+        <PencilIcon />
       </button>
       <button
         type="button"
-        title="Comments on this page"
+        title="All comments"
         aria-label="Toggle comments sidebar"
         onClick={onToggleSidebar}
-        style={{ ...bubbleBtn, background: sidebarOpen ? 'rgba(255,255,255,.16)' : 'transparent' }}
+        style={{ ...bubbleBtn, background: sidebarOpen ? '#efedf7' : 'transparent' }}
       >
-        💬
-        {comments.length > 0 && (
+        <ChatIcon />
+        {count > 0 && (
           <span
             style={{
               position: 'absolute',
-              transform: 'translate(11px, -9px)',
+              top: -3,
+              right: -3,
               minWidth: 15,
               height: 15,
               borderRadius: 8,
@@ -315,7 +425,7 @@ function Bubble({
               padding: '0 3px',
             }}
           >
-            {comments.length}
+            {count}
           </span>
         )}
       </button>
@@ -325,35 +435,23 @@ function Bubble({
 
 /* ------------------------------------------------------- the create dialog */
 
-/** Popover shown after a pin is placed: text plus pasted or attached images. */
-function CreateDialog() {
-  const { onPinPlaced, addComment, updateComment, setMode } = useWashiContext();
-  const [at, setAt] = useState<{ x: number; y: number; cx: number; cy: number } | null>(null);
-  const [text, setText] = useState('');
-  const [images, setImages] = useState<string[]>([]);
+function CreateDialog({
+  pending,
+  draft,
+  onDraft,
+  onSubmit,
+  onClose,
+}: {
+  pending: Pending;
+  draft: Draft;
+  onDraft: (d: Draft) => void;
+  onSubmit: () => Promise<void>;
+  onClose: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const lastClick = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const fileInput = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const track = (e: PointerEvent) => {
-      lastClick.current = { x: e.clientX, y: e.clientY };
-    };
-    window.addEventListener('pointerdown', track, true);
-    return () => window.removeEventListener('pointerdown', track, true);
-  }, []);
-
-  useEffect(
-    () =>
-      onPinPlaced(({ x, y }) => {
-        setAt({ x, y, cx: lastClick.current.x, cy: lastClick.current.y });
-        setText('');
-        setImages([]);
-        setError(null);
-      }),
-    [onPinPlaced],
-  );
+  const canSubmit = !!draft.text.trim() || draft.images.length > 0;
 
   const addFiles = async (files: Iterable<File>) => {
     setError(null);
@@ -362,7 +460,7 @@ function CreateDialog() {
       setBusy(true);
       try {
         const url = await uploadImage(f);
-        setImages((cur) => [...cur, url]);
+        onDraft({ ...draft, images: [...draft.images, url] });
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Image upload failed');
       } finally {
@@ -371,21 +469,12 @@ function CreateDialog() {
     }
   };
 
-  const close = () => {
-    setAt(null);
-    setMode('view');
-  };
-
   const submit = async () => {
-    if (!at || (!text.trim() && images.length === 0)) return;
+    if (!canSubmit || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const c = await addComment({ x: at.x, y: at.y, text: text.trim() || '(image)', color: ACCENT });
-      if (images.length > 0) {
-        await updateComment(c.id, { images } as unknown as Partial<Comment>);
-      }
-      close();
+      await onSubmit();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Saving failed');
     } finally {
@@ -393,9 +482,8 @@ function CreateDialog() {
     }
   };
 
-  if (!at) return null;
-  const left = Math.min(Math.max(at.cx, 12), window.innerWidth - 332);
-  const top = Math.min(Math.max(at.cy + 12, 12), window.innerHeight - 300);
+  const left = Math.min(Math.max(pending.cx, 12), window.innerWidth - 332);
+  const top = Math.min(Math.max(pending.cy + 14, 12), window.innerHeight - 320);
 
   return (
     <div
@@ -417,24 +505,25 @@ function CreateDialog() {
         <b style={{ fontSize: 12.5, color: '#1b1926' }}>Add comment</b>
         <button
           type="button"
-          onClick={close}
-          aria-label="Cancel"
+          onClick={onClose}
+          aria-label="Close (your draft is kept)"
+          title="Close — your draft is kept"
           style={{
             marginLeft: 'auto',
             border: 'none',
             background: 'transparent',
             color: '#8a879a',
             cursor: 'pointer',
-            fontSize: 14,
+            padding: 2,
           }}
         >
-          ✕
+          <CloseIcon size={13} />
         </button>
       </div>
       <textarea
         autoFocus
-        value={text}
-        onChange={(e) => setText(e.target.value)}
+        value={draft.text}
+        onChange={(e) => onDraft({ ...draft, text: e.target.value })}
         onPaste={(e) => {
           if (e.clipboardData.files.length > 0) {
             e.preventDefault();
@@ -443,7 +532,7 @@ function CreateDialog() {
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit();
-          if (e.key === 'Escape') close();
+          if (e.key === 'Escape') onClose();
         }}
         placeholder="Leave a comment… (paste screenshots here)"
         style={{
@@ -458,8 +547,326 @@ function CreateDialog() {
           fontFamily: 'inherit',
         }}
       />
-      {images.length > 0 && (
+      {draft.images.length > 0 && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+          {draft.images.map((url) => (
+            <span key={url} style={{ position: 'relative' }}>
+              <img
+                src={url}
+                alt=""
+                style={{
+                  width: 64,
+                  height: 48,
+                  objectFit: 'cover',
+                  borderRadius: 8,
+                  border: '1px solid #e3e1ec',
+                  display: 'block',
+                }}
+              />
+              <button
+                type="button"
+                aria-label="Remove image"
+                onClick={() => onDraft({ ...draft, images: draft.images.filter((u) => u !== url) })}
+                style={{
+                  position: 'absolute',
+                  top: -6,
+                  right: -6,
+                  width: 17,
+                  height: 17,
+                  borderRadius: 9,
+                  border: 'none',
+                  background: '#1b1926',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                }}
+              >
+                <CloseIcon size={9} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {error && <p style={{ margin: '8px 0 0', fontSize: 12, color: '#b3261e' }}>{error}</p>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+        <input
+          ref={fileInput}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            if (e.target.files) void addFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => fileInput.current?.click()}
+          title="Attach images"
+          style={{
+            border: '1px solid #dcdae6',
+            background: '#fff',
+            color: '#4a4760',
+            borderRadius: 9,
+            height: 30,
+            padding: '0 11px',
+            fontSize: 12,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <ImagePlusIcon size={13} />
+          Add images
+        </button>
+        <button
+          type="button"
+          disabled={busy || !canSubmit}
+          onClick={() => void submit()}
+          style={{
+            marginLeft: 'auto',
+            border: 'none',
+            background: busy || !canSubmit ? '#c9c3dd' : ACCENT,
+            color: '#fff',
+            borderRadius: 9,
+            height: 30,
+            padding: '0 14px',
+            fontSize: 12.5,
+            fontWeight: 600,
+            cursor: busy ? 'default' : 'pointer',
+          }}
+        >
+          {busy ? 'Saving…' : 'Add'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------- the sidebar */
+
+function Sidebar({
+  me,
+  route,
+  comments,
+  focusId,
+  onHover,
+  onOpenComment,
+  onEdit,
+  onResolve,
+  onDelete,
+  onClose,
+}: {
+  me: string;
+  route: string;
+  comments: ReviewComment[];
+  focusId: string | null;
+  onHover: (id: string | null) => void;
+  onOpenComment: (c: ReviewComment) => void;
+  onEdit: (c: ReviewComment, patch: { text: string; images?: string[] }) => void;
+  onResolve: (c: ReviewComment) => void;
+  onDelete: (c: ReviewComment) => void;
+  onClose: () => void;
+}) {
+  const cardRefs = useRef(new Map<string, HTMLDivElement>());
+
+  useEffect(() => {
+    if (focusId) cardRefs.current.get(focusId)?.scrollIntoView({ block: 'center' });
+  }, [focusId]);
+
+  return (
+    <aside
+      aria-label="All comments"
+      style={{
+        position: 'fixed',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 330,
+        boxSizing: 'border-box',
+        background: '#fff',
+        borderLeft: '1px solid #e5e4ec',
+        boxShadow: '-14px 0 34px -22px rgba(20,20,30,.35)',
+        display: 'flex',
+        flexDirection: 'column',
+        zIndex: 2147482900,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '13px 16px',
+          borderBottom: '1px solid #eeedf3',
+        }}
+      >
+        <b style={{ fontSize: 13.5, color: '#1b1926' }}>Comments</b>
+        <span style={{ fontSize: 11, color: '#8a879a' }}>{comments.length} across all pages</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close comments"
+          style={{
+            marginLeft: 'auto',
+            border: 'none',
+            background: 'transparent',
+            color: '#8a879a',
+            cursor: 'pointer',
+            padding: 2,
+          }}
+        >
+          <CloseIcon size={13} />
+        </button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px 90px' }}>
+        {comments.length === 0 && (
+          <p style={{ padding: '26px 10px', fontSize: 12.5, color: '#8a879a', textAlign: 'center' }}>
+            No comments yet. Use the pencil (or press C), then click any element.
+          </p>
+        )}
+        {comments.map((c, i) => (
+          <div
+            key={c.id}
+            ref={(el) => {
+              if (el) cardRefs.current.set(c.id, el);
+              else cardRefs.current.delete(c.id);
+            }}
+            onMouseEnter={() => onHover(c.id)}
+            onMouseLeave={() => onHover(null)}
+            style={{
+              border: `1px solid ${focusId === c.id ? ACCENT : '#eeedf3'}`,
+              borderRadius: 12,
+              padding: '10px 12px',
+              marginBottom: 8,
+              opacity: c.resolved ? 0.55 : 1,
+              background: '#fff',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+              <span
+                style={{
+                  width: 18,
+                  height: 18,
+                  flex: 'none',
+                  borderRadius: '50%',
+                  background: c.color ?? ACCENT,
+                  color: '#fff',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {i + 1}
+              </span>
+              <b style={{ fontSize: 12.5, color: '#1b1926' }}>{c.author ?? me}</b>
+              <span style={{ fontSize: 11, color: '#8a879a' }}>{timeAgo(c.createdAt)}</span>
+              {c.resolved && (
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: '#1c8a5c',
+                    background: '#e4f5ec',
+                    borderRadius: 8,
+                    padding: '2px 7px',
+                  }}
+                >
+                  resolved
+                </span>
+              )}
+            </div>
+            {c.page && c.page !== route && (
+              <button
+                type="button"
+                onClick={() => onOpenComment(c)}
+                title="Go to this page"
+                style={{
+                  border: 'none',
+                  background: '#f3f2f8',
+                  color: '#6b6880',
+                  borderRadius: 7,
+                  padding: '2px 8px',
+                  fontSize: 10.5,
+                  fontFamily: 'ui-monospace, monospace',
+                  cursor: 'pointer',
+                  marginBottom: 6,
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {c.page} ↗
+              </button>
+            )}
+            <CardBody c={c} onEdit={onEdit} onResolve={onResolve} onDelete={onDelete} />
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+/** A comment's text, images and actions — editable in place after the fact. */
+function CardBody({
+  c,
+  onEdit,
+  onResolve,
+  onDelete,
+}: {
+  c: ReviewComment;
+  onEdit: (c: ReviewComment, patch: { text: string; images?: string[] }) => void;
+  onResolve: (c: ReviewComment) => void;
+  onDelete: (c: ReviewComment) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState('');
+  const [images, setImages] = useState<string[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const start = () => {
+    setText(bodyOf(c));
+    setImages(c.images ?? []);
+    setEditing(true);
+  };
+  const save = () => {
+    onEdit(c, { text: text.trim() || '(image)', images: images.length ? images : undefined });
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <>
+        <textarea
+          autoFocus
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            height: 66,
+            resize: 'vertical',
+            border: '1px solid #dcdae6',
+            borderRadius: 9,
+            padding: '7px 9px',
+            fontSize: 12.5,
+            fontFamily: 'inherit',
+            marginBottom: 8,
+          }}
+        />
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
           {images.map((url) => (
             <span key={url} style={{ position: 'relative' }}>
               <img
@@ -488,264 +895,104 @@ function CreateDialog() {
                   border: 'none',
                   background: '#1b1926',
                   color: '#fff',
-                  fontSize: 10,
                   cursor: 'pointer',
-                  lineHeight: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
                 }}
               >
-                ✕
+                <CloseIcon size={9} />
               </button>
             </span>
           ))}
         </div>
-      )}
-      {error && <p style={{ margin: '8px 0 0', fontSize: 12, color: '#b3261e' }}>{error}</p>}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
         <input
           ref={fileInput}
           type="file"
           accept="image/*"
           multiple
           style={{ display: 'none' }}
-          onChange={(e) => {
-            if (e.target.files) void addFiles(e.target.files);
+          onChange={async (e) => {
+            for (const f of e.target.files ?? []) {
+              if (!f.type.startsWith('image/')) continue;
+              try {
+                const url = await uploadImage(f);
+                setImages((cur) => [...cur, url]);
+              } catch {
+                /* keep editing; the image just didn't attach */
+              }
+            }
             e.target.value = '';
           }}
         />
-        <button
-          type="button"
-          onClick={() => fileInput.current?.click()}
-          style={{
-            border: '1px solid #dcdae6',
-            background: '#fff',
-            color: '#4a4760',
-            borderRadius: 9,
-            height: 30,
-            padding: '0 11px',
-            fontSize: 12,
-            cursor: 'pointer',
-          }}
-        >
-          🖼 Add images
-        </button>
-        <button
-          type="button"
-          disabled={busy || (!text.trim() && images.length === 0)}
-          onClick={() => void submit()}
-          style={{
-            marginLeft: 'auto',
-            border: 'none',
-            background: busy || (!text.trim() && images.length === 0) ? '#c9c3dd' : ACCENT,
-            color: '#fff',
-            borderRadius: 9,
-            height: 30,
-            padding: '0 14px',
-            fontSize: 12.5,
-            fontWeight: 600,
-            cursor: busy ? 'default' : 'pointer',
-          }}
-        >
-          {busy ? 'Saving…' : 'Add'}
-        </button>
-      </div>
-    </div>
-  );
-}
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button type="button" style={sideBtn} onClick={() => fileInput.current?.click()}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <ImagePlusIcon size={12} /> Add images
+            </span>
+          </button>
+          <button
+            type="button"
+            style={{ ...sideBtn, marginLeft: 'auto', background: ACCENT, color: '#fff', border: 'none' }}
+            onClick={save}
+          >
+            Save
+          </button>
+          <button type="button" style={sideBtn} onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </div>
+      </>
+    );
+  }
 
-/* ------------------------------------------------------------- the sidebar */
-
-function Sidebar({
-  me,
-  route,
-  open,
-  focusId,
-  onClose,
-}: {
-  me: string;
-  route: string;
-  open: boolean;
-  focusId: string | null;
-  onClose: () => void;
-}) {
-  const { getCommentIndex, setActivePin } = useWashiContext();
-  const cardRefs = useRef(new Map<string, HTMLDivElement>());
-
-  useEffect(() => {
-    if (open && focusId) cardRefs.current.get(focusId)?.scrollIntoView({ block: 'center' });
-  }, [open, focusId]);
-
-  if (!open) return null;
   return (
-    <aside
-      aria-label="Comments on this page"
-      style={{
-        position: 'fixed',
-        top: 0,
-        right: 0,
-        bottom: 0,
-        width: 330,
-        boxSizing: 'border-box',
-        background: '#fff',
-        borderLeft: '1px solid #e5e4ec',
-        boxShadow: '-14px 0 34px -22px rgba(20,20,30,.35)',
-        display: 'flex',
-        flexDirection: 'column',
-        zIndex: 2147482900,
-      }}
-    >
-      <div
+    <>
+      <p
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '13px 16px',
-          borderBottom: '1px solid #eeedf3',
+          margin: '0 0 8px',
+          fontSize: 13,
+          lineHeight: 1.55,
+          color: '#37344a',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
         }}
       >
-        <b style={{ fontSize: 13.5, color: '#1b1926' }}>Comments</b>
-        <span
-          style={{
-            fontSize: 11,
-            color: '#8a879a',
-            fontFamily: 'ui-monospace, monospace',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {route}
-        </span>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close comments"
-          style={{
-            marginLeft: 'auto',
-            border: 'none',
-            background: 'transparent',
-            color: '#8a879a',
-            fontSize: 15,
-            cursor: 'pointer',
-            lineHeight: 1,
-          }}
-        >
-          ✕
+        {bodyOf(c)}
+      </p>
+      {c.images && c.images.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+          {c.images.map((url) => (
+            <a key={url} href={url} target="_blank" rel="noreferrer" title="Open full size">
+              <img
+                src={url}
+                alt="attachment"
+                style={{
+                  width: 88,
+                  height: 62,
+                  objectFit: 'cover',
+                  borderRadius: 8,
+                  border: '1px solid #e3e1ec',
+                  display: 'block',
+                }}
+              />
+            </a>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button type="button" style={sideBtn} onClick={() => onResolve(c)}>
+          {c.resolved ? 'Reopen' : 'Resolve'}
+        </button>
+        <button type="button" style={sideBtn} onClick={start}>
+          Edit
+        </button>
+        <button type="button" style={{ ...sideBtn, color: '#b3261e' }} onClick={() => onDelete(c)}>
+          Delete
         </button>
       </div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px 90px' }}>
-        <CommentList
-          sort={(a, b) => a.createdAt - b.createdAt}
-          emptyState={
-            <p style={{ padding: '26px 10px', fontSize: 12.5, color: '#8a879a', textAlign: 'center' }}>
-              No comments on this page yet. Use the pencil, then click anywhere.
-            </p>
-          }
-          renderComment={(comment, { onResolve, onDelete }) => {
-            const c = comment as ReviewComment;
-            const n = getCommentIndex(c.id) + 1;
-            return (
-              <div
-                key={c.id}
-                ref={(el) => {
-                  if (el) cardRefs.current.set(c.id, el);
-                  else cardRefs.current.delete(c.id);
-                }}
-                onMouseEnter={() => setActivePin(c.id)}
-                onMouseLeave={() => setActivePin(null)}
-                style={{
-                  border: `1px solid ${focusId === c.id ? ACCENT : '#eeedf3'}`,
-                  borderRadius: 12,
-                  padding: '10px 12px',
-                  marginBottom: 8,
-                  opacity: c.resolved ? 0.55 : 1,
-                  background: '#fff',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
-                  <span
-                    style={{
-                      width: 18,
-                      height: 18,
-                      flex: 'none',
-                      borderRadius: '50%',
-                      background: c.color ?? ACCENT,
-                      color: '#fff',
-                      fontSize: 10,
-                      fontWeight: 700,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    {n}
-                  </span>
-                  <b style={{ fontSize: 12.5, color: '#1b1926' }}>{authorOf(c, me)}</b>
-                  <span style={{ fontSize: 11, color: '#8a879a' }}>{timeAgo(c.createdAt)}</span>
-                  {c.resolved && (
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontWeight: 700,
-                        color: '#1c8a5c',
-                        background: '#e4f5ec',
-                        borderRadius: 8,
-                        padding: '2px 7px',
-                      }}
-                    >
-                      resolved
-                    </span>
-                  )}
-                </div>
-                <p
-                  style={{
-                    margin: '0 0 8px',
-                    fontSize: 13,
-                    lineHeight: 1.55,
-                    color: '#37344a',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {bodyOf(c)}
-                </p>
-                {c.images && c.images.length > 0 && (
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-                    {c.images.map((url) => (
-                      <a key={url} href={url} target="_blank" rel="noreferrer" title="Open full size">
-                        <img
-                          src={url}
-                          alt="attachment"
-                          style={{
-                            width: 88,
-                            height: 62,
-                            objectFit: 'cover',
-                            borderRadius: 8,
-                            border: '1px solid #e3e1ec',
-                            display: 'block',
-                          }}
-                        />
-                      </a>
-                    ))}
-                  </div>
-                )}
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button type="button" style={sideBtn} onClick={() => void onResolve()}>
-                    {c.resolved ? 'Reopen' : 'Resolve'}
-                  </button>
-                  <button
-                    type="button"
-                    style={{ ...sideBtn, color: '#b3261e' }}
-                    onClick={() => void onDelete()}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            );
-          }}
-        />
-      </div>
-    </aside>
+    </>
   );
 }
 
@@ -846,125 +1093,236 @@ function NameModal({ onDone, onCancel }: { onDone: (name: string) => void; onCan
   );
 }
 
-/**
- * Holds annotate mode behind a name: the pencil bounces back to view and asks
- * once, and a submitted name puts the user straight into annotate mode. The
- * bubble's name chip re-opens the same modal through `forceAsk`.
- */
-function NameFlow({
-  author,
-  forceAsk,
-  onNamed,
-  onAskHandled,
-}: {
-  author: string | null;
-  forceAsk: boolean;
-  onNamed: (name: string) => void;
-  onAskHandled: () => void;
-}) {
-  const { mode, setMode } = useWashiContext();
-  const [asking, setAsking] = useState(false);
-  useEffect(() => {
-    if (mode === 'annotate' && !author) {
-      setMode('view');
-      setAsking(true);
-    }
-  }, [mode, author, setMode]);
-  useEffect(() => {
-    if (forceAsk) setAsking(true);
-  }, [forceAsk]);
-  if (!asking) return null;
-  const finish = () => {
-    setAsking(false);
-    onAskHandled();
-  };
-  return (
-    <NameModal
-      onCancel={finish}
-      onDone={(name) => {
-        const hadName = !!author;
-        onNamed(name);
-        finish();
-        if (!hadName) setMode('annotate');
-      }}
-    />
-  );
-}
-
 /* --------------------------------------------------------------------- app */
 
-/** The route this page was opened on; /__review itself falls back to the hub. */
-function initialRoute(): string {
-  const path = location.pathname + location.search;
-  if (path === '/' || path.startsWith('/__review')) return '/integrations';
-  return path;
-}
-
-/** Opens the sidebar when a pin is clicked and remembers which comment. */
-function PinClickOpener({ onOpen }: { onOpen: (id: string) => void }) {
-  const { onCommentClick } = useWashiContext();
-  useEffect(() => onCommentClick((c) => onOpen(c.id)), [onCommentClick, onOpen]);
-  return null;
-}
-
 export function App() {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const [author, setAuthor] = useState<string | null>(storedName);
   const [route, setRoute] = useState(initialRoute);
+  const [mode, setMode] = useState<Mode>('view');
+  const [comments, setComments] = useState<ReviewComment[]>([]);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [draft, setDraft] = useState<Draft>(storedDraft);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
   const [askName, setAskName] = useState(false);
 
-  // Mirror the iframe's route onto the address bar, so links copied from it
-  // open the review at the same page.
+  const refresh = useCallback(async () => {
+    try {
+      setComments((await listComments()).sort((a, b) => a.createdAt - b.createdAt));
+    } catch {
+      /* transient — next mutation refreshes again */
+    }
+  }, []);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const updateDraft = useCallback((d: Draft) => {
+    setDraft(d);
+    persistDraft(d);
+  }, []);
+
+  // Entering annotate needs a name once; leaving it keeps the draft, drops the pin.
+  const toggleMode = useCallback(() => {
+    setMode((m) => {
+      if (m === 'annotate') {
+        setPending(null);
+        return 'view';
+      }
+      if (!storedName()) {
+        setAskName(true);
+        return m;
+      }
+      return 'annotate';
+    });
+  }, []);
+
+  // "C" toggles annotate everywhere — the shell and inside the iframe.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTypingTarget(e.target)) return;
+      if (e.key === 'c' || e.key === 'C') toggleMode();
+      if (e.key === 'Escape') {
+        setPending(null);
+        setMode('view');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    const attach = () => {
+      const win = iframeRef.current?.contentWindow as
+        | (Window & { __reviewKeys?: boolean })
+        | null
+        | undefined;
+      if (!win || win.__reviewKeys) return;
+      try {
+        win.addEventListener('keydown', onKey);
+        win.__reviewKeys = true;
+      } catch {
+        /* not same-origin-ready yet */
+      }
+    };
+    attach();
+    const tick = setInterval(attach, 800);
+    return () => {
+      clearInterval(tick);
+      window.removeEventListener('keydown', onKey);
+      try {
+        iframeRef.current?.contentWindow?.removeEventListener('keydown', onKey);
+      } catch {
+        /* gone with the frame */
+      }
+    };
+  }, [toggleMode]);
+
+  // Mirror the iframe's SPA route onto the address bar.
+  useEffect(() => {
+    const tick = setInterval(() => {
+      try {
+        const loc = iframeRef.current?.contentWindow?.location;
+        if (loc?.pathname) {
+          const r = loc.pathname + loc.search;
+          setRoute((cur) => (r === cur ? cur : r));
+        }
+      } catch {
+        /* not ready yet */
+      }
+    }, 600);
+    return () => clearInterval(tick);
+  }, []);
   useEffect(() => {
     if (location.pathname + location.search !== route) history.replaceState(null, '', route);
   }, [route]);
 
-  const onRoute = useCallback((r: string) => {
-    setRoute((cur) => (r === cur ? cur : r));
-  }, []);
+  const submit = useCallback(async () => {
+    if (!pending) return;
+    const c: ReviewComment = {
+      id: crypto.randomUUID(),
+      text: draft.text.trim() || '(image)',
+      x: pending.x,
+      y: pending.y,
+      createdAt: Date.now(),
+      color: ACCENT,
+      author: storedName() ?? author ?? 'Anonymous',
+      page: route,
+      images: draft.images.length ? draft.images : undefined,
+      anchor: pending.anchor ?? undefined,
+    };
+    await createComment(c);
+    updateDraft(EMPTY_DRAFT);
+    setPending(null);
+    setMode('view');
+    await refresh();
+  }, [pending, draft, author, route, refresh, updateDraft]);
 
-  const openAt = useCallback((id: string) => {
-    setFocusId(id);
-    setSidebarOpen(true);
-  }, []);
+  const openComment = useCallback(
+    (c: ReviewComment) => {
+      setFocusId(c.id);
+      setSidebarOpen(true);
+      if (c.page && c.page !== route) {
+        try {
+          iframeRef.current?.contentWindow?.location.assign(c.page);
+        } catch {
+          /* navigation just won't happen */
+        }
+      }
+    },
+    [route],
+  );
 
-  const adapter = useMemo(() => new RestAdapter(route), [route]);
+  const resolve = useCallback(
+    async (c: ReviewComment) => {
+      await patchComment(c.id, { resolved: !c.resolved });
+      await refresh();
+    },
+    [refresh],
+  );
+  const edit = useCallback(
+    async (c: ReviewComment, patch: { text: string; images?: string[] }) => {
+      await patchComment(c.id, patch);
+      await refresh();
+    },
+    [refresh],
+  );
+  const remove = useCallback(
+    async (c: ReviewComment) => {
+      await deleteComment(c.id);
+      await refresh();
+    },
+    [refresh],
+  );
 
   return (
-    <WashiProvider key={route} adapter={adapter} mountOptions={{ disableBuiltinDialog: true }}>
+    <>
       <div style={{ position: 'fixed', inset: 0 }}>
-        <WashiFrame
+        <iframe
+          ref={iframeRef}
           src={route}
           title="Studio preview"
           style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
         />
       </div>
+      <PinLayer
+        iframeRef={iframeRef}
+        comments={comments}
+        route={route}
+        mode={mode}
+        pending={pending}
+        hoverId={hoverId ?? focusId}
+        onPlace={setPending}
+        onPinClick={(id) => {
+          const c = comments.find((x) => x.id === id);
+          if (c) openComment(c);
+        }}
+      />
+      {pending && (
+        <CreateDialog
+          pending={pending}
+          draft={draft}
+          onDraft={updateDraft}
+          onSubmit={submit}
+          onClose={() => setPending(null)}
+        />
+      )}
       <Bubble
         author={author}
+        mode={mode}
+        count={comments.length}
         sidebarOpen={sidebarOpen}
+        onToggleMode={toggleMode}
         onChangeName={() => setAskName(true)}
         onToggleSidebar={() => setSidebarOpen((o) => !o)}
       />
-      <CreateDialog />
-      <Sidebar
-        me={author ?? 'Anonymous'}
-        route={route}
-        open={sidebarOpen}
-        focusId={focusId}
-        onClose={() => {
-          setSidebarOpen(false);
-          setFocusId(null);
-        }}
-      />
-      <PinClickOpener onOpen={openAt} />
-      <RouteWatcher onRoute={onRoute} />
-      <NameFlow
-        author={author}
-        forceAsk={askName}
-        onNamed={setAuthor}
-        onAskHandled={() => setAskName(false)}
-      />
-    </WashiProvider>
+      {sidebarOpen && (
+        <Sidebar
+          me={author ?? 'Anonymous'}
+          route={route}
+          comments={comments}
+          focusId={focusId}
+          onHover={setHoverId}
+          onOpenComment={openComment}
+          onEdit={(c, patch) => void edit(c, patch)}
+          onResolve={(c) => void resolve(c)}
+          onDelete={(c) => void remove(c)}
+          onClose={() => {
+            setSidebarOpen(false);
+            setFocusId(null);
+          }}
+        />
+      )}
+      {askName && (
+        <NameModal
+          onCancel={() => setAskName(false)}
+          onDone={(name) => {
+            const hadName = !!author;
+            setAuthor(name);
+            setAskName(false);
+            if (!hadName) setMode('annotate');
+          }}
+        />
+      )}
+    </>
   );
 }
