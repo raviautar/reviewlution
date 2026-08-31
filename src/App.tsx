@@ -35,6 +35,8 @@ type Draft = { text: string; images: string[] };
 type Pending = { anchor: Anchor | null; x: number; y: number; cx: number; cy: number };
 
 const EMPTY_DRAFT: Draft = { text: '', images: [] };
+/** Outline colour for the element under the cursor — nothing in the studio's palette is this pink. */
+const HIGHLIGHT = '#ff1fb3';
 
 function storedDraft(): Draft {
   try {
@@ -74,6 +76,42 @@ function isTypingTarget(t: EventTarget | null): boolean {
 /* ---------------------------------------------------------------- pin layer */
 
 type PinPos = { id: string; n: number; x: number; y: number; resolved: boolean };
+type Outline = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  radius: string;
+  label: string;
+};
+
+/** The element's own box, corner radius included, plus a short name for it. */
+function outlineOf(el: Element): Outline | null {
+  const r = el.getBoundingClientRect();
+  if (r.width === 0 && r.height === 0) return null;
+  const text = (el.textContent ?? '').trim().replace(/\s+/g, ' ');
+  const snippet = text.length > 40 ? `${text.slice(0, 40)}…` : text;
+  return {
+    left: r.left,
+    top: r.top,
+    width: r.width,
+    height: r.height,
+    radius: el.ownerDocument.defaultView?.getComputedStyle(el).borderRadius ?? '0px',
+    label: `${el.tagName.toLowerCase()}${snippet ? ` · “${snippet}”` : ''} · ${Math.round(r.width)}×${Math.round(r.height)}`,
+  };
+}
+
+function sameOutline(a: Outline | null, b: Outline | null): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.left === b.left &&
+    a.top === b.top &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.radius === b.radius &&
+    a.label === b.label
+  );
+}
 
 function PinLayer({
   iframeRef,
@@ -97,6 +135,8 @@ function PinLayer({
   const [pins, setPins] = useState<PinPos[]>([]);
   const [pendingPos, setPendingPos] = useState<{ x: number; y: number } | null>(null);
   const cache = useRef(new Map<string, Element>());
+  const hoverEl = useRef<Element | null>(null);
+  const [outline, setOutline] = useState<Outline | null>(null);
 
   // Positions are read from the live DOM every frame — this is what glues a
   // dot to its element through scrolling, layout shifts and SPA re-renders.
@@ -152,10 +192,40 @@ function PinLayer({
       } else {
         setPendingPos(null);
       }
+      // While a pin is being written the outline stays on its element; otherwise
+      // it follows the cursor. Measured every frame so it rides along on scroll.
+      const target =
+        mode !== 'annotate'
+          ? null
+          : pending
+            ? (cache.current.get('__pending') ?? null)
+            : hoverEl.current;
+      const nextOutline = target?.isConnected ? outlineOf(target) : null;
+      setOutline((cur) => (sameOutline(cur, nextOutline) ? cur : nextOutline));
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [iframeRef, comments, route, pending]);
+  }, [iframeRef, comments, route, pending, mode]);
+
+  const track = (e: React.MouseEvent) => {
+    const el = iframeRef.current?.contentDocument?.elementFromPoint(e.clientX, e.clientY) ?? null;
+    hoverEl.current = el && el.tagName !== 'HTML' && el.tagName !== 'BODY' ? el : null;
+  };
+
+  // The overlay swallows the wheel, so hand it to the scrollable ancestor under
+  // the cursor — otherwise nothing below the fold can be commented on.
+  const forwardWheel = (e: React.WheelEvent) => {
+    const doc = iframeRef.current?.contentDocument;
+    const win = doc?.defaultView;
+    if (!doc || !win) return;
+    let el: Element | null = doc.elementFromPoint(e.clientX, e.clientY);
+    while (el) {
+      const cs = win.getComputedStyle(el);
+      if (/(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight) break;
+      el = el.parentElement;
+    }
+    (el ?? doc.scrollingElement ?? doc.documentElement).scrollBy(e.deltaX, e.deltaY);
+  };
 
   const place = (e: React.MouseEvent) => {
     const doc = iframeRef.current?.contentDocument;
@@ -173,6 +243,11 @@ function PinLayer({
   return (
     <div
       onClick={mode === 'annotate' ? place : undefined}
+      onMouseMove={mode === 'annotate' ? track : undefined}
+      onMouseLeave={() => {
+        hoverEl.current = null;
+      }}
+      onWheel={mode === 'annotate' ? forwardWheel : undefined}
       style={{
         position: 'fixed',
         inset: 0,
@@ -181,6 +256,45 @@ function PinLayer({
         cursor: mode === 'annotate' ? 'crosshair' : undefined,
       }}
     >
+      {outline && (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              left: outline.left,
+              top: outline.top,
+              width: outline.width,
+              height: outline.height,
+              boxSizing: 'border-box',
+              borderRadius: outline.radius,
+              border: `2px solid ${HIGHLIGHT}`,
+              boxShadow: `0 0 0 3px ${HIGHLIGHT}33, 0 0 18px 4px ${HIGHLIGHT}99, inset 0 0 10px ${HIGHLIGHT}33`,
+              pointerEvents: 'none',
+              transition: 'left .05s linear, top .05s linear, width .05s linear, height .05s linear',
+            }}
+          />
+          <span
+            style={{
+              position: 'absolute',
+              left: Math.max(4, Math.min(outline.left, window.innerWidth - 330)),
+              top: outline.top >= 26 ? outline.top - 24 : outline.top + outline.height + 4,
+              maxWidth: 320,
+              padding: '2px 8px',
+              borderRadius: 6,
+              background: HIGHLIGHT,
+              color: '#fff',
+              font: '600 11px/16px system-ui, sans-serif',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              pointerEvents: 'none',
+              boxShadow: '0 2px 8px -2px rgba(20,20,30,.4)',
+            }}
+          >
+            {outline.label}
+          </span>
+        </>
+      )}
       {pins.map((p) => (
         <button
           key={p.id}
