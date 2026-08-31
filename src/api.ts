@@ -7,6 +7,7 @@ export const POS_KEY = 'washi-review-bubble-pos';
 export const DRAFT_KEY = 'washi-review-draft';
 const API = '/__review/api/comments';
 const IMAGES_API = '/__review/api/images';
+const VIDEOS_API = '/__review/api/videos';
 
 /** A one-level reply; replies cannot be replied to. */
 export interface Reply {
@@ -28,6 +29,8 @@ export interface ReviewComment {
   author?: string;
   page?: string;
   images?: string[];
+  /** Screen recordings attached to the comment. */
+  videos?: string[];
   /** Element anchoring — pins glue to the element, and agents get the context. */
   anchor?: Anchor;
   replies?: Reply[];
@@ -86,6 +89,16 @@ export async function uploadImage(file: File): Promise<string> {
     body: file,
   });
   if (!res.ok) throw new Error(`Uploading the image failed (${res.status})`);
+  return ((await res.json()) as { url: string }).url;
+}
+
+export async function uploadVideo(blob: Blob): Promise<string> {
+  const res = await fetch(VIDEOS_API, {
+    method: 'POST',
+    headers: { 'content-type': blob.type || 'video/webm' },
+    body: blob,
+  });
+  if (!res.ok) throw new Error(`Uploading the recording failed (${res.status})`);
   return ((await res.json()) as { url: string }).url;
 }
 

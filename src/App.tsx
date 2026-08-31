@@ -30,13 +30,14 @@ import {
   type ReviewComment,
 } from './api.js';
 import { anchorAt, resolveAnchor, type Anchor } from './anchors.js';
+import { RecordButton } from './RecordButton.js';
 import { ChatIcon, CloseIcon, GripIcon, ImagePlusIcon, PencilIcon } from './icons.js';
 
 type Mode = 'view' | 'annotate';
-type Draft = { text: string; images: string[] };
+type Draft = { text: string; images: string[]; videos: string[] };
 type Pending = { anchor: Anchor | null; x: number; y: number; cx: number; cy: number };
 
-const EMPTY_DRAFT: Draft = { text: '', images: [] };
+const EMPTY_DRAFT: Draft = { text: '', images: [], videos: [] };
 /** Outline colour for the element under the cursor — nothing in the studio's palette is this pink. */
 const HIGHLIGHT = '#ff1fb3';
 
@@ -44,8 +45,9 @@ function storedDraft(): Draft {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
     if (!raw) return EMPTY_DRAFT;
-    const d = JSON.parse(raw) as Draft;
-    return typeof d.text === 'string' && Array.isArray(d.images) ? d : EMPTY_DRAFT;
+    const d = JSON.parse(raw) as Partial<Draft>;
+    if (typeof d.text !== 'string' || !Array.isArray(d.images)) return EMPTY_DRAFT;
+    return { text: d.text, images: d.images, videos: Array.isArray(d.videos) ? d.videos : [] };
   } catch {
     return EMPTY_DRAFT;
   }
@@ -53,7 +55,7 @@ function storedDraft(): Draft {
 
 function persistDraft(d: Draft) {
   try {
-    if (!d.text && d.images.length === 0) localStorage.removeItem(DRAFT_KEY);
+    if (!d.text && d.images.length === 0 && d.videos.length === 0) localStorage.removeItem(DRAFT_KEY);
     else localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
   } catch {
     /* draft just won't survive a reload */
@@ -64,7 +66,8 @@ function persistDraft(d: Draft) {
 const CONFIG: { defaultRoute: string; title: string } = {
   defaultRoute: '/',
   title: 'Preview · Review',
-  ...((window as Window & { __WASHI__?: Partial<{ defaultRoute: string; title: string }> }).__WASHI__ ?? {}),
+  ...((window as Window & { __WASHI__?: Partial<{ defaultRoute: string; title: string }> }).__WASHI__ ??
+    {}),
 };
 
 /** The route this page was opened on; `/` and /__review itself fall back to the configured default. */
@@ -662,7 +665,8 @@ function CreateDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const canSubmit = !!draft.text.trim() || draft.images.length > 0;
+  const canSubmit = !!draft.text.trim() || draft.images.length > 0 || draft.videos.length > 0;
+  const [recording, setRecording] = useState(false);
 
   const addFiles = async (files: Iterable<File>) => {
     setError(null);
@@ -710,6 +714,8 @@ function CreateDialog({
         boxShadow: '0 18px 50px -18px rgba(20,20,30,.4)',
         padding: '12px 14px',
         zIndex: 2147483050,
+        // Out of the way while an area is picked or recorded, so it is not in the clip.
+        visibility: recording ? 'hidden' : undefined,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
@@ -801,6 +807,23 @@ function CreateDialog({
           ))}
         </div>
       )}
+      {draft.videos.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+          {draft.videos.map((url) => (
+            <span key={url} style={{ position: 'relative' }}>
+              <video src={url} controls preload="metadata" style={clipStyle} />
+              <button
+                type="button"
+                aria-label="Remove recording"
+                onClick={() => onDraft({ ...draft, videos: draft.videos.filter((u) => u !== url) })}
+                style={removeBtn}
+              >
+                <CloseIcon size={9} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       {error && <p style={{ margin: '8px 0 0', fontSize: 12, color: '#b3261e' }}>{error}</p>}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
         <input
@@ -813,6 +836,11 @@ function CreateDialog({
             if (e.target.files) void addFiles(e.target.files);
             e.target.value = '';
           }}
+        />
+        <RecordButton
+          onDone={(url) => onDraft({ ...draft, videos: [...draft.videos, url] })}
+          onBusy={setRecording}
+          style={attachBtn}
         />
         <button
           type="button"
@@ -902,7 +930,7 @@ function Sidebar({
   focusId: string | null;
   onHover: (id: string | null) => void;
   onOpenComment: (c: ReviewComment) => void;
-  onEdit: (c: ReviewComment, patch: { text: string; images?: string[] }) => void;
+  onEdit: (c: ReviewComment, patch: { text: string; images?: string[]; videos?: string[] }) => void;
   onResolve: (c: ReviewComment) => void;
   onDelete: (c: ReviewComment) => void;
   onReply: (c: ReviewComment, text: string) => Promise<void>;
@@ -1282,7 +1310,7 @@ function CardBody({
   onReply,
 }: {
   c: ReviewComment;
-  onEdit: (c: ReviewComment, patch: { text: string; images?: string[] }) => void;
+  onEdit: (c: ReviewComment, patch: { text: string; images?: string[]; videos?: string[] }) => void;
   onResolve: (c: ReviewComment) => void;
   onDelete: (c: ReviewComment) => void;
   onReply: () => void;
@@ -1290,15 +1318,21 @@ function CardBody({
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
   const [images, setImages] = useState<string[]>([]);
+  const [videos, setVideos] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const start = () => {
     setText(bodyOf(c));
     setImages(c.images ?? []);
+    setVideos(c.videos ?? []);
     setEditing(true);
   };
   const save = () => {
-    onEdit(c, { text: text.trim() || '(image)', images: images.length ? images : undefined });
+    onEdit(c, {
+      text: text.trim() || (videos.length ? '(recording)' : '(image)'),
+      images: images.length ? images : undefined,
+      videos: videos.length ? videos : undefined,
+    });
     setEditing(false);
   };
 
@@ -1367,6 +1401,23 @@ function CardBody({
             </span>
           ))}
         </div>
+        {videos.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {videos.map((url) => (
+              <span key={url} style={{ position: 'relative' }}>
+                <video src={url} controls preload="metadata" style={clipStyle} />
+                <button
+                  type="button"
+                  aria-label="Remove recording"
+                  onClick={() => setVideos((cur) => cur.filter((u) => u !== url))}
+                  style={removeBtn}
+                >
+                  <CloseIcon size={9} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <input
           ref={fileInput}
           type="file"
@@ -1392,6 +1443,7 @@ function CardBody({
               <ImagePlusIcon size={12} /> Add images
             </span>
           </button>
+          <RecordButton onDone={(url) => setVideos((cur) => [...cur, url])} style={sideBtn} />
           <button
             type="button"
             style={{ ...sideBtn, marginLeft: 'auto', background: ACCENT, color: '#fff', border: 'none' }}
@@ -1441,6 +1493,19 @@ function CardBody({
           ))}
         </div>
       )}
+      {c.videos && c.videos.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+          {c.videos.map((url) => (
+            <video
+              key={url}
+              src={url}
+              controls
+              preload="metadata"
+              style={{ ...clipStyle, width: 280, maxHeight: 180 }}
+            />
+          ))}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 6 }}>
         <button type="button" style={sideBtn} onClick={onReply}>
           Reply
@@ -1458,6 +1523,44 @@ function CardBody({
     </>
   );
 }
+
+const clipStyle = {
+  width: 200,
+  maxHeight: 130,
+  borderRadius: 8,
+  border: '1px solid #e3e1ec',
+  display: 'block',
+  background: '#000',
+} as const;
+
+const removeBtn = {
+  position: 'absolute',
+  top: -6,
+  right: -6,
+  width: 17,
+  height: 17,
+  borderRadius: 9,
+  border: 'none',
+  background: '#1b1926',
+  color: '#fff',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+} as const;
+
+const attachBtn = {
+  border: '1px solid #dcdae6',
+  background: '#fff',
+  color: '#4a4760',
+  borderRadius: 9,
+  height: 30,
+  padding: '0 11px',
+  fontSize: 12,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+} as const;
 
 const sideBtn = {
   border: '1px solid #e2e0ea',
@@ -1824,7 +1927,7 @@ export function App() {
     if (!pending) return;
     const c: ReviewComment = {
       id: crypto.randomUUID(),
-      text: draft.text.trim() || '(image)',
+      text: draft.text.trim() || (draft.videos.length ? '(recording)' : '(image)'),
       x: pending.x,
       y: pending.y,
       createdAt: Date.now(),
@@ -1832,6 +1935,7 @@ export function App() {
       author: storedName() ?? author ?? 'Anonymous',
       page: route,
       images: draft.images.length ? draft.images : undefined,
+      videos: draft.videos.length ? draft.videos : undefined,
       anchor: pending.anchor ?? undefined,
     };
     await createComment(c);
@@ -1890,7 +1994,7 @@ export function App() {
     [refresh],
   );
   const edit = useCallback(
-    async (c: ReviewComment, patch: { text: string; images?: string[] }) => {
+    async (c: ReviewComment, patch: { text: string; images?: string[]; videos?: string[] }) => {
       await patchComment(c.id, patch);
       await refresh();
     },

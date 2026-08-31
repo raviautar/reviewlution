@@ -115,6 +115,37 @@ app.get('/__review/api/images/:name', async (req, reply) => {
   }
 });
 
+// Screen recordings: webm clips of up to 250 MB, stored next to the images and
+// streamed back with range support so <video> can seek.
+const VIDEO_DIR = join(dirname(DATA_FILE), 'videos');
+const VIDEO_EXT = { 'video/webm': 'webm', 'video/mp4': 'mp4' };
+app.addContentTypeParser(
+  /^video\//,
+  { parseAs: 'buffer', bodyLimit: 250 * 1024 * 1024 },
+  (_req, body, done) => done(null, body),
+);
+app.post('/__review/api/videos', async (req, reply) => {
+  const ext = VIDEO_EXT[(req.headers['content-type'] ?? '').split(';')[0].trim()];
+  if (!ext || !Buffer.isBuffer(req.body) || req.body.length === 0) {
+    reply.code(415);
+    return { error: 'send a webm or mp4 body' };
+  }
+  const name = `${randomUUID()}.${ext}`;
+  await mkdir(VIDEO_DIR, { recursive: true });
+  await writeFile(join(VIDEO_DIR, name), req.body);
+  reply.code(201);
+  return { url: `/__review/api/videos/${name}` };
+});
+await mkdir(VIDEO_DIR, { recursive: true });
+app.register(fastifyStatic, {
+  root: VIDEO_DIR,
+  prefix: '/__review/api/videos/',
+  decorateReply: false,
+  cacheControl: true,
+  maxAge: '365d',
+  immutable: true,
+});
+
 app.get('/__review/healthz', async () => ({ ok: true, comments: comments.length }));
 
 app.get('/__review/api/comments', async (req) => {
