@@ -141,7 +141,10 @@ export function resolveAnchor(
   let hit = cache.get(key);
   // React reuses DOM nodes across wizard steps, so a connected node can hold
   // different content than it did; re-check its identity every few frames.
-  if (hit && (!hit.el.isConnected || (now - hit.checkedAt > 250 && !matchesElement(hit.el, anchor.element)))) {
+  if (
+    hit &&
+    (!hit.el.isConnected || (now - hit.checkedAt > 250 && !matchesElement(hit.el, anchor.element)))
+  ) {
     cache.delete(key);
     hit = undefined;
   }
