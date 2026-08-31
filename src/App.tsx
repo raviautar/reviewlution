@@ -122,6 +122,7 @@ function PinLayer({
   hoverId,
   onPlace,
   onPinClick,
+  onMove,
 }: {
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
   comments: ReviewComment[];
@@ -131,12 +132,33 @@ function PinLayer({
   hoverId: string | null;
   onPlace: (p: Pending) => void;
   onPinClick: (id: string) => void;
+  /** A pin was dragged onto another element: its new anchor and fallback position. */
+  onMove: (id: string, patch: Partial<ReviewComment>) => void;
 }) {
   const [pins, setPins] = useState<PinPos[]>([]);
   const [pendingPos, setPendingPos] = useState<{ x: number; y: number } | null>(null);
   const cache = useRef(new Map<string, Element>());
   const hoverEl = useRef<Element | null>(null);
   const [outline, setOutline] = useState<Outline | null>(null);
+  // Dragging a pin: pointer capture keeps the events on the pin even over the
+  // iframe, so no window listeners are needed; a 4px threshold separates a
+  // drag from a click, and Escape drops the pin back where it was.
+  const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
+  const dragRef = useRef<{ id: string; startX: number; startY: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+
+  useEffect(() => {
+    if (!drag) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      dragRef.current = null;
+      hoverEl.current = null;
+      suppressClick.current = true;
+      setDrag(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drag]);
 
   // Positions are read from the live DOM every frame — this is what glues a
   // dot to its element through scrolling, layout shifts and SPA re-renders.
@@ -152,7 +174,8 @@ function PinLayer({
         if (c.resolved) return;
         let pos: { x: number; y: number } | null = null;
         if (c.anchor) {
-          pos = resolveAnchor(doc, c.anchor, cache.current, c.id);
+          // Keyed by selector too, so a pin moved to another element re-resolves.
+          pos = resolveAnchor(doc, c.anchor, cache.current, `${c.id}|${c.anchor.selector}`);
         } else if (c.page === route) {
           pos = { x: (c.x / 100) * window.innerWidth, y: (c.y / 100) * window.innerHeight };
         }
@@ -192,20 +215,62 @@ function PinLayer({
       } else {
         setPendingPos(null);
       }
-      // While a pin is being written the outline stays on its element; otherwise
-      // it follows the cursor. Measured every frame so it rides along on scroll.
-      const target =
-        mode !== 'annotate'
+      // While a pin is being written the outline stays on its element; while one
+      // is being dragged, or in annotate mode, it follows the cursor. Measured
+      // every frame so it rides along on scroll.
+      const target = drag
+        ? hoverEl.current
+        : mode !== 'annotate'
           ? null
           : pending
             ? (cache.current.get('__pending') ?? null)
             : hoverEl.current;
       const nextOutline = target?.isConnected ? outlineOf(target) : null;
+      if (drag && nextOutline) nextOutline.label = `Move here: ${nextOutline.label}`;
       setOutline((cur) => (sameOutline(cur, nextOutline) ? cur : nextOutline));
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [iframeRef, comments, route, pending, mode]);
+  }, [iframeRef, comments, route, pending, mode, drag]);
+
+  const pinPointerDown = (e: React.PointerEvent<HTMLButtonElement>, id: string) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* synthetic pointer — no capture available, the drag still works over the pin */
+    }
+    dragRef.current = { id, startX: e.clientX, startY: e.clientY, moved: false };
+  };
+  const pinPointerMove = (e: React.PointerEvent, id: string) => {
+    const d = dragRef.current;
+    if (!d || d.id !== id) return;
+    if (!d.moved) {
+      if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 4) return;
+      d.moved = true;
+    }
+    const el = iframeRef.current?.contentDocument?.elementFromPoint(e.clientX, e.clientY) ?? null;
+    hoverEl.current = el && el.tagName !== 'HTML' && el.tagName !== 'BODY' ? el : null;
+    setDrag({ id, x: e.clientX, y: e.clientY });
+  };
+  const pinPointerUp = (e: React.PointerEvent, id: string) => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d || !d.moved) return;
+    suppressClick.current = true;
+    hoverEl.current = null;
+    setDrag(null);
+    const doc = iframeRef.current?.contentDocument;
+    const anchor = doc ? anchorAt(doc, e.clientX, e.clientY) : null;
+    if (!anchor) return;
+    onMove(id, {
+      anchor,
+      x: (e.clientX / window.innerWidth) * 100,
+      y: (e.clientY / window.innerHeight) * 100,
+      page: route,
+    });
+  };
 
   const track = (e: React.MouseEvent) => {
     const el = iframeRef.current?.contentDocument?.elementFromPoint(e.clientX, e.clientY) ?? null;
@@ -295,43 +360,64 @@ function PinLayer({
           </span>
         </>
       )}
-      {pins.map((p) => (
-        <button
-          key={p.id}
-          type="button"
-          title="Open this comment"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPinClick(p.id);
-          }}
-          style={{
-            position: 'absolute',
-            left: p.x - 11,
-            top: p.y - 11,
-            width: 22,
-            height: 22,
-            borderRadius: '50% 50% 50% 4px',
-            border: '2px solid #fff',
-            background: ACCENT,
-            color: '#fff',
-            fontSize: 10,
-            fontWeight: 700,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            pointerEvents: 'auto',
-            padding: 0,
-            opacity: p.resolved ? 0.45 : 1,
-            boxShadow:
-              hoverId === p.id
-                ? `0 0 0 3px ${ACCENT}55, 0 4px 10px -4px rgba(20,20,30,.5)`
-                : '0 4px 10px -4px rgba(20,20,30,.5)',
-          }}
-        >
-          {p.n}
-        </button>
-      ))}
+      {pins.map((p) => {
+        const dragging = drag?.id === p.id;
+        const x = dragging ? drag.x : p.x;
+        const y = dragging ? drag.y : p.y;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            title="Open this comment · drag it onto another element to move it"
+            onPointerDown={(e) => pinPointerDown(e, p.id)}
+            onPointerMove={(e) => pinPointerMove(e, p.id)}
+            onPointerUp={(e) => pinPointerUp(e, p.id)}
+            onPointerCancel={() => {
+              dragRef.current = null;
+              hoverEl.current = null;
+              setDrag(null);
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (suppressClick.current) {
+                suppressClick.current = false;
+                return;
+              }
+              onPinClick(p.id);
+            }}
+            style={{
+              position: 'absolute',
+              left: x - 11,
+              top: y - 11,
+              width: 22,
+              height: 22,
+              borderRadius: '50% 50% 50% 4px',
+              border: `2px solid ${dragging ? HIGHLIGHT : '#fff'}`,
+              background: ACCENT,
+              color: '#fff',
+              fontSize: 10,
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: dragging ? 'grabbing' : 'pointer',
+              pointerEvents: 'auto',
+              touchAction: 'none',
+              padding: 0,
+              opacity: p.resolved ? 0.45 : 1,
+              transform: dragging ? 'scale(1.2)' : undefined,
+              zIndex: dragging ? 1 : undefined,
+              boxShadow: dragging
+                ? `0 0 0 4px ${HIGHLIGHT}44, 0 8px 18px -6px rgba(20,20,30,.6)`
+                : hoverId === p.id
+                  ? `0 0 0 3px ${ACCENT}55, 0 4px 10px -4px rgba(20,20,30,.5)`
+                  : '0 4px 10px -4px rgba(20,20,30,.5)',
+            }}
+          >
+            {p.n}
+          </button>
+        );
+      })}
       {pendingPos && (
         <span
           style={{
@@ -1441,6 +1527,13 @@ export function App() {
     },
     [refresh],
   );
+  const move = useCallback(
+    async (id: string, patch: Partial<ReviewComment>) => {
+      await patchComment(id, patch);
+      await refresh();
+    },
+    [refresh],
+  );
   const edit = useCallback(
     async (c: ReviewComment, patch: { text: string; images?: string[] }) => {
       await patchComment(c.id, patch);
@@ -1484,6 +1577,7 @@ export function App() {
           const c = comments.find((x) => x.id === id);
           if (c) openComment(c);
         }}
+        onMove={move}
       />
       {pending && (
         <CreateDialog

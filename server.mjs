@@ -140,8 +140,10 @@ app.patch('/__review/api/comments/:id', async (req, reply) => {
     reply.code(404);
     return { error: 'not found' };
   }
-  // id and page are identity, not content — a patch never moves a comment.
+  // id is identity. page only changes together with a new anchor — dragging a
+  // pin onto another element — never as a side effect of editing the text.
   const { id, page, ...updates } = req.body ?? {};
+  if (updates.anchor && typeof page === 'string') updates.page = page;
   comments[i] = { ...comments[i], ...updates };
   await persist('update', { id: req.params.id, updates });
   return comments[i];
