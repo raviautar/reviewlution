@@ -1173,6 +1173,9 @@ export function App() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [author, setAuthor] = useState<string | null>(storedName);
   const [route, setRoute] = useState(initialRoute);
+  // The iframe's src is set once. Binding it to `route` would reload the studio
+  // on every SPA navigation the poll below mirrors, wiping its in-page state.
+  const [startRoute] = useState(initialRoute);
   const [mode, setMode] = useState<Mode>('view');
   const [comments, setComments] = useState<ReviewComment[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -1350,7 +1353,7 @@ export function App() {
       <div style={{ position: 'fixed', inset: 0 }}>
         <iframe
           ref={iframeRef}
-          src={route}
+          src={startRoute}
           title="Studio preview"
           style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
         />
