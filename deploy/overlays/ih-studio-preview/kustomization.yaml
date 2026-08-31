@@ -1,0 +1,67 @@
+# The Wand Studio preview on the dev cluster: internal (VPN) ingress, the
+# existing data disk, and the app's default route.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ih-studio-preview
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/raviautar/washi-toolbar
+    newName: wandserviceplatform.azurecr.io/images/washi-toolbar
+    newTag: latest
+patches:
+  - target:
+      kind: PersistentVolumeClaim
+      name: washi-toolbar-data
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: washi-toolbar-data
+  - target:
+      kind: Deployment
+      name: washi-toolbar
+    patch: |
+      - op: replace
+        path: /spec/template/spec/volumes/0/persistentVolumeClaim/claimName
+        value: washi-review-data
+      - op: replace
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: UPSTREAM
+            value: http://ih-studio-preview:8080
+          - name: DATA_FILE
+            value: /data/comments.json
+          - name: DEFAULT_ROUTE
+            value: /integrations
+          - name: APP_TITLE
+            value: Studio preview · Review
+  - target:
+      kind: Ingress
+      name: washi-toolbar
+    patch: |
+      - op: add
+        path: /spec/ingressClassName
+        value: internal
+      - op: add
+        path: /metadata/annotations/kubernetes.io~1ingress.class
+        value: internal
+      - op: add
+        path: /metadata/annotations/external-dns.alpha.kubernetes.io~1hostname
+        value: ih-studio-review.dev.wand.ai
+      - op: add
+        path: /metadata/annotations/external-dns.alpha.kubernetes.io~1cloudflare-proxied
+        value: "false"
+      - op: add
+        path: /metadata/annotations/external-dns.alpha.kubernetes.io~1ttl
+        value: "120"
+      - op: replace
+        path: /spec/rules/0/host
+        value: ih-studio-review.dev.wand.ai
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: ih-studio-review.dev.wand.ai
+      - op: replace
+        path: /spec/tls/0/secretName
+        value: ih-studio-review.dev.wand.ai-tls

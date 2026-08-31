@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: washi-toolbar
+  labels:
+    app.kubernetes.io/name: washi-toolbar
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: washi-toolbar
+  template:
+    metadata:
+      labels:
+        app: washi-toolbar
+    spec:
+      containers:
+        - name: washi-toolbar
+          image: ghcr.io/raviautar/washi-toolbar:latest
+          ports:
+            - containerPort: 8090
+              protocol: TCP
+          env:
+            - name: UPSTREAM
+              value: http://app:8080
+            - name: DATA_FILE
+              value: /data/comments.json
+            - name: DEFAULT_ROUTE
+              value: /
+            - name: APP_TITLE
+              value: Preview · Review
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /__review/healthz
+              port: 8090
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /__review/healthz
+              port: 8090
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 25m
+              memory: 96Mi
+            limits:
+              cpu: 200m
+              memory: 192Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: washi-toolbar-data

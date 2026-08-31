@@ -19,6 +19,9 @@ import Fastify from 'fastify';
 const PORT = Number(process.env.PORT ?? 8090);
 const UPSTREAM = process.env.UPSTREAM ?? 'http://localhost:8099';
 const DATA_FILE = process.env.DATA_FILE ?? './comments.json';
+// Where a visit to `/` (or to /__review itself) lands, and the browser tab title.
+const DEFAULT_ROUTE = process.env.DEFAULT_ROUTE ?? '/';
+const APP_TITLE = process.env.APP_TITLE ?? 'Preview · Review';
 const here = dirname(fileURLToPath(import.meta.url));
 
 /* ------------------------------------------------------------------ store */
@@ -56,11 +59,18 @@ const app = Fastify({ logger: true });
 // a non-document Sec-Fetch-Dest and falls through to the proxy. Requests
 // without the header (curl, probes) proxy too.
 let shellHtml = null;
+const escapeHtml = (v) => v.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+function shellWithConfig(html) {
+  const config = JSON.stringify({ defaultRoute: DEFAULT_ROUTE, title: APP_TITLE }).replace(/</g, '\\u003c');
+  return html
+    .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(APP_TITLE)}</title>`)
+    .replace('</head>', `<script>window.__WASHI__=${config}</script></head>`);
+}
 app.addHook('onRequest', async (req, reply) => {
   const isDocument = req.headers['sec-fetch-dest'] === 'document';
   if (req.method !== 'GET' || !isDocument) return;
   if (req.url.startsWith('/__review')) return;
-  shellHtml ??= await readFile(join(here, 'dist', 'index.html'), 'utf8');
+  shellHtml ??= shellWithConfig(await readFile(join(here, 'dist', 'index.html'), 'utf8'));
   // A cached shell would keep an old bundle running after a redeploy — the
   // hashed assets may cache forever, the document itself must not.
   reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').send(shellHtml);

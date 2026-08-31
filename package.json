@@ -1,12 +1,13 @@
 {
-  "name": "washi-review",
+  "name": "washi-toolbar",
   "private": true,
   "version": "0.1.0",
-  "description": "Self-hosted review shell: proxies the studio preview and overlays element-anchored comment pins on it.",
+  "description": "Review toolbar for web app previews: proxies the app same-origin and overlays element-anchored comment pins, replies and a comments API for agents.",
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "dev": "vite"
   },
   "dependencies": {
     "@fastify/http-proxy": "^11.1.2",

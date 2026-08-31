@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: washi-toolbar
+  labels:
+    app.kubernetes.io/name: washi-toolbar
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8090
+      targetPort: 8090
+      protocol: TCP
+  selector:
+    app: washi-toolbar

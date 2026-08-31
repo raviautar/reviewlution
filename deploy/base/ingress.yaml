@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: washi-toolbar
+  labels:
+    app.kubernetes.io/name: washi-toolbar
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  rules:
+    - host: review.example.com
+      http:
+        paths:
+          - path: /
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: washi-toolbar
+                port:
+                  number: 8090
+  tls:
+    - hosts:
+        - review.example.com
+      secretName: review.example.com-tls

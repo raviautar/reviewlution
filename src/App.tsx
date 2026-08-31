@@ -1,5 +1,5 @@
 /**
- * Review shell: the studio preview in a same-origin iframe (the server proxies
+ * Review shell: the app under review in a same-origin iframe (the server proxies
  * it), our own element-anchored pin layer on top, comments stored on this host.
  *
  * The shell is URL-transparent: the server hands this page out for any document
@@ -60,10 +60,17 @@ function persistDraft(d: Draft) {
   }
 }
 
-/** The route this page was opened on; /__review itself falls back to the hub. */
+/** Server-injected settings (see server.mjs): where `/` lands, and the tab title. */
+const CONFIG: { defaultRoute: string; title: string } = {
+  defaultRoute: '/',
+  title: 'Preview · Review',
+  ...((window as Window & { __WASHI__?: Partial<{ defaultRoute: string; title: string }> }).__WASHI__ ?? {}),
+};
+
+/** The route this page was opened on; `/` and /__review itself fall back to the configured default. */
 function initialRoute(): string {
   const path = location.pathname + location.search;
-  if (path === '/' || path.startsWith('/__review')) return '/integrations';
+  if (path === '/' || path.startsWith('/__review')) return CONFIG.defaultRoute;
   return path;
 }
 
@@ -1909,7 +1916,7 @@ export function App() {
         <iframe
           ref={iframeRef}
           src={startRoute}
-          title="Studio preview"
+          title={CONFIG.title}
           style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
         />
       </div>
