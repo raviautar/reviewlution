@@ -907,6 +907,8 @@ function Sidebar({
   const [tab, setTab] = useState<'open' | 'resolved'>('open');
   const [confirmClear, setConfirmClear] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(storedCollapsed);
+  // One reply box open at a time; it starts as a button on the card.
+  const [replyingId, setReplyingId] = useState<string | null>(null);
 
   const setFold = (ids: Set<string>) => {
     persistCollapsed(ids);
@@ -949,6 +951,8 @@ function Sidebar({
         background: 'transparent',
         padding: '9px 2px',
         marginRight: 16,
+        flex: 'none',
+        whiteSpace: 'nowrap',
         fontSize: 12.5,
         fontWeight: 600,
         cursor: 'pointer',
@@ -968,7 +972,7 @@ function Sidebar({
         top: 0,
         right: 0,
         bottom: 0,
-        width: 330,
+        width: 'min(440px, 100vw)',
         boxSizing: 'border-box',
         background: '#fff',
         borderLeft: '1px solid #e5e4ec',
@@ -988,12 +992,60 @@ function Sidebar({
       >
         <b style={{ fontSize: 13.5, color: '#1b1926' }}>Comments</b>
         <span style={{ fontSize: 11, color: '#8a879a' }}>across all pages</span>
+        {shown.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              const next = new Set(collapsed);
+              for (const { c } of shown) {
+                if (allFolded) next.delete(c.id);
+                else next.add(c.id);
+              }
+              setFold(next);
+            }}
+            title={allFolded ? 'Expand all comments' : 'Collapse all comments to one line'}
+            aria-label={allFolded ? 'Expand all comments' : 'Collapse all comments'}
+            style={{
+              marginLeft: 'auto',
+              border: 'none',
+              background: 'transparent',
+              color: '#8a879a',
+              cursor: 'pointer',
+              padding: 2,
+              display: 'inline-flex',
+            }}
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              {allFolded ? (
+                <>
+                  <path d="m7 4 5 5 5-5" />
+                  <path d="m7 20 5-5 5 5" />
+                </>
+              ) : (
+                <>
+                  <path d="m7 9 5-5 5 5" />
+                  <path d="m7 15 5 5 5-5" />
+                </>
+              )}
+            </svg>
+          </button>
+        )}
         <button
           type="button"
           onClick={onClose}
           aria-label="Close comments"
           style={{
-            marginLeft: 'auto',
+            marginLeft: shown.length > 0 ? 0 : 'auto',
             border: 'none',
             background: 'transparent',
             color: '#8a879a',
@@ -1014,33 +1066,6 @@ function Sidebar({
       >
         {tabBtn('open', `Open (${openCount})`)}
         {tabBtn('resolved', `Resolved (${numbered.length - openCount})`)}
-        {shown.length > 0 && (
-          <button
-            type="button"
-            onClick={() => {
-              const next = new Set(collapsed);
-              for (const { c } of shown) {
-                if (allFolded) next.delete(c.id);
-                else next.add(c.id);
-              }
-              setFold(next);
-            }}
-            title={allFolded ? 'Expand every comment' : 'Collapse every comment to one line'}
-            style={{
-              marginLeft: tab === 'resolved' && numbered.length - openCount > 0 ? 0 : 'auto',
-              marginRight: 8,
-              border: 'none',
-              background: 'transparent',
-              color: '#6b6880',
-              fontSize: 11.5,
-              fontWeight: 600,
-              cursor: 'pointer',
-              padding: '4px 2px',
-            }}
-          >
-            {allFolded ? 'Expand all' : 'Collapse all'}
-          </button>
-        )}
         {tab === 'resolved' && numbered.length - openCount > 0 && (
           <button
             type="button"
@@ -1053,8 +1078,11 @@ function Sidebar({
               onClearResolved();
             }}
             onMouseLeave={() => setConfirmClear(false)}
+            title="Delete every resolved comment"
             style={{
               marginLeft: 'auto',
+              flex: 'none',
+              whiteSpace: 'nowrap',
               border: `1px solid ${confirmClear ? '#b3261e' : '#e2e0ea'}`,
               background: confirmClear ? '#fbe9e7' : '#fff',
               color: '#b3261e',
@@ -1066,7 +1094,7 @@ function Sidebar({
               cursor: 'pointer',
             }}
           >
-            {confirmClear ? `Really delete ${numbered.length - openCount}?` : 'Delete all resolved'}
+            {confirmClear ? `Really delete ${numbered.length - openCount}?` : 'Delete all'}
           </button>
         )}
       </div>
@@ -1215,8 +1243,20 @@ function Sidebar({
             )}
             {!collapsed.has(c.id) && (
               <>
-                <CardBody c={c} onEdit={onEdit} onResolve={onResolve} onDelete={onDelete} />
-                <Replies c={c} onReply={onReply} onDeleteReply={onDeleteReply} />
+                <CardBody
+                  c={c}
+                  onEdit={onEdit}
+                  onResolve={onResolve}
+                  onDelete={onDelete}
+                  onReply={() => setReplyingId(c.id)}
+                />
+                <Replies
+                  c={c}
+                  open={replyingId === c.id}
+                  onClose={() => setReplyingId(null)}
+                  onReply={onReply}
+                  onDeleteReply={onDeleteReply}
+                />
               </>
             )}
           </div>
@@ -1232,11 +1272,13 @@ function CardBody({
   onEdit,
   onResolve,
   onDelete,
+  onReply,
 }: {
   c: ReviewComment;
   onEdit: (c: ReviewComment, patch: { text: string; images?: string[] }) => void;
   onResolve: (c: ReviewComment) => void;
   onDelete: (c: ReviewComment) => void;
+  onReply: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
@@ -1393,6 +1435,9 @@ function CardBody({
         </div>
       )}
       <div style={{ display: 'flex', gap: 6 }}>
+        <button type="button" style={sideBtn} onClick={onReply}>
+          Reply
+        </button>
         <button type="button" style={sideBtn} onClick={() => onResolve(c)}>
           {c.resolved ? 'Reopen' : 'Resolve'}
         </button>
@@ -1419,13 +1464,17 @@ const sideBtn = {
   cursor: 'pointer',
 } as const;
 
-/** The one-level thread under a comment, plus the box to add to it. */
+/** The one-level thread under a comment; the box to add to it opens from the card's Reply button. */
 function Replies({
   c,
+  open,
+  onClose,
   onReply,
   onDeleteReply,
 }: {
   c: ReviewComment;
+  open: boolean;
+  onClose: () => void;
   onReply: (c: ReviewComment, text: string) => Promise<void>;
   onDeleteReply: (c: ReviewComment, replyId: string) => void;
 }) {
@@ -1440,10 +1489,13 @@ function Replies({
     try {
       await onReply(c, t);
       setText('');
+      onClose();
     } finally {
       setSending(false);
     }
   };
+
+  if (replies.length === 0 && !open) return null;
 
   return (
     <div style={{ marginTop: 10, paddingLeft: 10, borderLeft: '2px solid #eeedf3' }}>
@@ -1484,45 +1536,58 @@ function Replies({
           </p>
         </div>
       ))}
-      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-        <textarea
-          value={text}
-          rows={1}
-          placeholder={replies.length ? 'Reply…' : 'Reply to this comment…'}
-          aria-label="Reply"
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            boxSizing: 'border-box',
-            minHeight: 28,
-            maxHeight: 96,
-            resize: 'none',
-            border: '1px solid #e2e0ea',
-            borderRadius: 8,
-            padding: '5px 8px',
-            fontSize: 12,
-            fontFamily: 'inherit',
-            lineHeight: 1.4,
-          }}
-        />
-        {text.trim() && (
-          <button
-            type="button"
-            disabled={sending}
-            onClick={() => void send()}
-            style={{ ...sideBtn, background: ACCENT, color: '#fff', border: 'none', flex: 'none' }}
-          >
-            Reply
-          </button>
-        )}
-      </div>
+      {open && (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+          <textarea
+            autoFocus
+            value={text}
+            rows={2}
+            placeholder="Write a reply… Enter sends, Shift+Enter for a new line"
+            aria-label="Reply"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+              if (e.key === 'Escape') onClose();
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              boxSizing: 'border-box',
+              minHeight: 44,
+              maxHeight: 120,
+              resize: 'vertical',
+              border: '1px solid #dcdae6',
+              borderRadius: 9,
+              padding: '6px 9px',
+              fontSize: 12.5,
+              fontFamily: 'inherit',
+              lineHeight: 1.45,
+            }}
+          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 'none' }}>
+            <button
+              type="button"
+              disabled={sending || !text.trim()}
+              onClick={() => void send()}
+              style={{
+                ...sideBtn,
+                background: ACCENT,
+                color: '#fff',
+                border: 'none',
+                opacity: text.trim() ? 1 : 0.5,
+              }}
+            >
+              Send
+            </button>
+            <button type="button" style={sideBtn} onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
