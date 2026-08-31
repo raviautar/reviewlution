@@ -31,6 +31,7 @@ import {
 } from './api.js';
 import { anchorAt, resolveAnchor, type Anchor } from './anchors.js';
 import { RecordButton } from './RecordButton.js';
+import { SnapButton } from './SnapButton.js';
 import { ChatIcon, CloseIcon, GripIcon, ImagePlusIcon, PencilIcon } from './icons.js';
 
 type Mode = 'view' | 'annotate';
@@ -837,6 +838,11 @@ function CreateDialog({
             e.target.value = '';
           }}
         />
+        <SnapButton
+          onDone={(url) => onDraft({ ...draft, images: [...draft.images, url] })}
+          onBusy={setRecording}
+          style={attachBtn}
+        />
         <RecordButton
           onDone={(url) => onDraft({ ...draft, videos: [...draft.videos, url] })}
           onBusy={setRecording}
@@ -1443,6 +1449,7 @@ function CardBody({
               <ImagePlusIcon size={12} /> Add images
             </span>
           </button>
+          <SnapButton onDone={(url) => setImages((cur) => [...cur, url])} style={sideBtn} />
           <RecordButton onDone={(url) => setVideos((cur) => [...cur, url])} style={sideBtn} />
           <button
             type="button"

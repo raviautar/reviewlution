@@ -179,3 +179,49 @@ export async function startRecording(rect: Rect): Promise<Recording> {
   });
   return { startedAt: Date.now(), cropped, stop, onEnded: (cb) => endedCbs.push(cb) };
 }
+
+/** One frame of the chosen area as a PNG: the same capture as a recording, stopped after the first frame. */
+export async function captureRegion(rect: Rect): Promise<Blob> {
+  const constraints = {
+    video: { frameRate: 5 },
+    audio: false,
+    preferCurrentTab: true,
+    selfBrowserSurface: 'include',
+    surfaceSwitching: 'exclude',
+  };
+  const stream = await navigator.mediaDevices.getDisplayMedia(constraints as DisplayMediaStreamOptions);
+  try {
+    const track = stream.getVideoTracks()[0];
+    if (!track) throw new Error('no video track');
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    await video.play();
+    if (!video.videoWidth)
+      await new Promise<void>((r) =>
+        video.addEventListener('loadedmetadata', () => r(), { once: true }),
+      );
+    // The first frames of a tab capture can still be blank; give it a moment.
+    await new Promise((r) => setTimeout(r, 250));
+    const surface = (track.getSettings() as MediaTrackSettings & { displaySurface?: string })
+      .displaySurface;
+    const cropped = surface === 'browser';
+    const sx = video.videoWidth / window.innerWidth;
+    const sy = video.videoHeight / window.innerHeight;
+    const crop = cropped
+      ? { x: rect.x * sx, y: rect.y * sy, w: rect.w * sx, h: rect.h * sy }
+      : { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(2, Math.round(crop.w));
+    canvas.height = Math.max(2, Math.round(crop.h));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('no canvas');
+    ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height);
+    return await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('no image'))), 'image/png'),
+    );
+  } finally {
+    for (const t of stream.getTracks()) t.stop();
+  }
+}
