@@ -8,6 +8,14 @@ export const DRAFT_KEY = 'washi-review-draft';
 const API = '/__review/api/comments';
 const IMAGES_API = '/__review/api/images';
 
+/** A one-level reply; replies cannot be replied to. */
+export interface Reply {
+  id: string;
+  text: string;
+  author?: string;
+  createdAt: number;
+}
+
 export interface ReviewComment {
   id: string;
   text: string;
@@ -22,6 +30,24 @@ export interface ReviewComment {
   images?: string[];
   /** Element anchoring — pins glue to the element, and agents get the context. */
   anchor?: Anchor;
+  replies?: Reply[];
+}
+
+export async function addReply(commentId: string, text: string, author: string): Promise<void> {
+  const res = await fetch(`${API}/${encodeURIComponent(commentId)}/replies`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text, author }),
+  });
+  if (!res.ok) throw new Error(`Saving the reply failed (${res.status})`);
+}
+
+export async function deleteReply(commentId: string, replyId: string): Promise<void> {
+  const res = await fetch(
+    `${API}/${encodeURIComponent(commentId)}/replies/${encodeURIComponent(replyId)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) throw new Error(`Deleting the reply failed (${res.status})`);
 }
 
 export async function listComments(): Promise<ReviewComment[]> {

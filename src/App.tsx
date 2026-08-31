@@ -17,6 +17,8 @@ import {
   AUTHOR_KEY,
   DRAFT_KEY,
   POS_KEY,
+  addReply,
+  deleteReply,
   bodyOf,
   createComment,
   deleteComment,
@@ -852,6 +854,26 @@ function CreateDialog({
 
 /* ------------------------------------------------------------- the sidebar */
 
+const COLLAPSED_KEY = 'washi-review-collapsed';
+
+function storedCollapsed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_KEY);
+    const ids = raw ? (JSON.parse(raw) as unknown) : [];
+    return new Set(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function persistCollapsed(ids: Set<string>) {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* the fold state just won't survive a reload */
+  }
+}
+
 function Sidebar({
   me,
   route,
@@ -862,6 +884,8 @@ function Sidebar({
   onEdit,
   onResolve,
   onDelete,
+  onReply,
+  onDeleteReply,
   onClearResolved,
   onClose,
 }: {
@@ -874,22 +898,45 @@ function Sidebar({
   onEdit: (c: ReviewComment, patch: { text: string; images?: string[] }) => void;
   onResolve: (c: ReviewComment) => void;
   onDelete: (c: ReviewComment) => void;
+  onReply: (c: ReviewComment, text: string) => Promise<void>;
+  onDeleteReply: (c: ReviewComment, replyId: string) => void;
   onClearResolved: () => void;
   onClose: () => void;
 }) {
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const [tab, setTab] = useState<'open' | 'resolved'>('open');
   const [confirmClear, setConfirmClear] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(storedCollapsed);
+
+  const setFold = (ids: Set<string>) => {
+    persistCollapsed(ids);
+    setCollapsed(ids);
+  };
+  const toggleFold = (id: string) => {
+    const next = new Set(collapsed);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setFold(next);
+  };
 
   // Numbering stays global (matches the pins); the tabs only filter the view.
   const numbered = comments.map((c, i) => ({ c, n: i + 1 }));
   const shown = numbered.filter(({ c }) => (tab === 'resolved' ? c.resolved : !c.resolved));
   const openCount = numbered.length - numbered.filter(({ c }) => c.resolved).length;
+  const allFolded = shown.length > 0 && shown.every(({ c }) => collapsed.has(c.id));
 
   useEffect(() => {
     if (!focusId) return;
     const target = comments.find((c) => c.id === focusId);
     if (target?.resolved) setTab('resolved');
+    // Opening a comment from its pin always shows it in full.
+    setCollapsed((cur) => {
+      if (!cur.has(focusId)) return cur;
+      const next = new Set(cur);
+      next.delete(focusId);
+      persistCollapsed(next);
+      return next;
+    });
     cardRefs.current.get(focusId)?.scrollIntoView({ block: 'center' });
   }, [focusId, comments]);
 
@@ -967,6 +1014,33 @@ function Sidebar({
       >
         {tabBtn('open', `Open (${openCount})`)}
         {tabBtn('resolved', `Resolved (${numbered.length - openCount})`)}
+        {shown.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              const next = new Set(collapsed);
+              for (const { c } of shown) {
+                if (allFolded) next.delete(c.id);
+                else next.add(c.id);
+              }
+              setFold(next);
+            }}
+            title={allFolded ? 'Expand every comment' : 'Collapse every comment to one line'}
+            style={{
+              marginLeft: tab === 'resolved' && numbered.length - openCount > 0 ? 0 : 'auto',
+              marginRight: 8,
+              border: 'none',
+              background: 'transparent',
+              color: '#6b6880',
+              fontSize: 11.5,
+              fontWeight: 600,
+              cursor: 'pointer',
+              padding: '4px 2px',
+            }}
+          >
+            {allFolded ? 'Expand all' : 'Collapse all'}
+          </button>
+        )}
         {tab === 'resolved' && numbered.length - openCount > 0 && (
           <button
             type="button"
@@ -1016,13 +1090,24 @@ function Sidebar({
             style={{
               border: `1px solid ${focusId === c.id ? ACCENT : '#eeedf3'}`,
               borderRadius: 12,
-              padding: '10px 12px',
+              padding: collapsed.has(c.id) ? '7px 12px' : '10px 12px',
               marginBottom: 8,
               opacity: c.resolved ? 0.55 : 1,
               background: '#fff',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+            <div
+              onClick={() => toggleFold(c.id)}
+              title={collapsed.has(c.id) ? 'Expand' : 'Collapse'}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 7,
+                marginBottom: collapsed.has(c.id) ? 0 : 6,
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
               <span
                 style={{
                   width: 18,
@@ -1040,8 +1125,10 @@ function Sidebar({
               >
                 {i}
               </span>
-              <b style={{ fontSize: 12.5, color: '#1b1926' }}>{c.author ?? me}</b>
-              <span style={{ fontSize: 11, color: '#8a879a' }}>{timeAgo(c.createdAt)}</span>
+              <b style={{ fontSize: 12.5, color: '#1b1926', flex: 'none' }}>{c.author ?? me}</b>
+              <span style={{ fontSize: 11, color: '#8a879a', flex: 'none' }}>
+                {timeAgo(c.createdAt)}
+              </span>
               {c.resolved && (
                 <span
                   style={{
@@ -1051,13 +1138,58 @@ function Sidebar({
                     background: '#e4f5ec',
                     borderRadius: 8,
                     padding: '2px 7px',
+                    flex: 'none',
                   }}
                 >
                   resolved
                 </span>
               )}
+              {collapsed.has(c.id) && (
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontSize: 12,
+                    color: '#6b6880',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {bodyOf(c).split('\n')[0]}
+                </span>
+              )}
+              {collapsed.has(c.id) && (c.replies?.length ?? 0) > 0 && (
+                <span style={{ fontSize: 10.5, color: '#8a879a', flex: 'none' }}>
+                  {c.replies?.length} {c.replies?.length === 1 ? 'reply' : 'replies'}
+                </span>
+              )}
+              <span
+                aria-hidden
+                style={{
+                  marginLeft: 'auto',
+                  flex: 'none',
+                  color: '#8a879a',
+                  display: 'inline-flex',
+                  transform: collapsed.has(c.id) ? 'rotate(-90deg)' : 'none',
+                  transition: 'transform .12s ease',
+                }}
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </span>
             </div>
-            {c.page && c.page !== route && (
+            {!collapsed.has(c.id) && c.page && c.page !== route && (
               <button
                 type="button"
                 onClick={() => onOpenComment(c)}
@@ -1081,7 +1213,12 @@ function Sidebar({
                 {c.page} ↗
               </button>
             )}
-            <CardBody c={c} onEdit={onEdit} onResolve={onResolve} onDelete={onDelete} />
+            {!collapsed.has(c.id) && (
+              <>
+                <CardBody c={c} onEdit={onEdit} onResolve={onResolve} onDelete={onDelete} />
+                <Replies c={c} onReply={onReply} onDeleteReply={onDeleteReply} />
+              </>
+            )}
           </div>
         ))}
       </div>
@@ -1282,6 +1419,114 @@ const sideBtn = {
   cursor: 'pointer',
 } as const;
 
+/** The one-level thread under a comment, plus the box to add to it. */
+function Replies({
+  c,
+  onReply,
+  onDeleteReply,
+}: {
+  c: ReviewComment;
+  onReply: (c: ReviewComment, text: string) => Promise<void>;
+  onDeleteReply: (c: ReviewComment, replyId: string) => void;
+}) {
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const replies = c.replies ?? [];
+
+  const send = async () => {
+    const t = text.trim();
+    if (!t || sending) return;
+    setSending(true);
+    try {
+      await onReply(c, t);
+      setText('');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 10, paddingLeft: 10, borderLeft: '2px solid #eeedf3' }}>
+      {replies.map((r) => (
+        <div key={r.id} style={{ marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <b style={{ fontSize: 12, color: '#1b1926' }}>{r.author ?? 'Anonymous'}</b>
+            <span style={{ fontSize: 10.5, color: '#8a879a' }}>{timeAgo(r.createdAt)}</span>
+            <button
+              type="button"
+              aria-label="Delete reply"
+              title="Delete reply"
+              onClick={() => onDeleteReply(c, r.id)}
+              style={{
+                marginLeft: 'auto',
+                border: 'none',
+                background: 'transparent',
+                color: '#a5a2b3',
+                cursor: 'pointer',
+                padding: 2,
+                display: 'inline-flex',
+              }}
+            >
+              <CloseIcon size={9} />
+            </button>
+          </div>
+          <p
+            style={{
+              margin: '2px 0 0',
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              color: '#37344a',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {r.text}
+          </p>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+        <textarea
+          value={text}
+          rows={1}
+          placeholder={replies.length ? 'Reply…' : 'Reply to this comment…'}
+          aria-label="Reply"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            boxSizing: 'border-box',
+            minHeight: 28,
+            maxHeight: 96,
+            resize: 'none',
+            border: '1px solid #e2e0ea',
+            borderRadius: 8,
+            padding: '5px 8px',
+            fontSize: 12,
+            fontFamily: 'inherit',
+            lineHeight: 1.4,
+          }}
+        />
+        {text.trim() && (
+          <button
+            type="button"
+            disabled={sending}
+            onClick={() => void send()}
+            style={{ ...sideBtn, background: ACCENT, color: '#fff', border: 'none', flex: 'none' }}
+          >
+            Reply
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------------------------------------------- name flow */
 
 function NameModal({ onDone, onCancel }: { onDone: (name: string) => void; onCancel: () => void }) {
@@ -1385,15 +1630,34 @@ export function App() {
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [askName, setAskName] = useState(false);
 
+  // Comments are shared state: everyone's resolves, replies and new pins show
+  // up here without a reload. Polled while the tab is visible; an unchanged
+  // payload is not re-rendered.
+  const lastPayload = useRef('');
   const refresh = useCallback(async () => {
     try {
-      setComments((await listComments()).sort((a, b) => a.createdAt - b.createdAt));
+      const next = (await listComments()).sort((a, b) => a.createdAt - b.createdAt);
+      const payload = JSON.stringify(next);
+      if (payload === lastPayload.current) return;
+      lastPayload.current = payload;
+      setComments(next);
     } catch {
-      /* transient — next mutation refreshes again */
+      /* transient — the next poll or mutation refreshes again */
     }
   }, []);
   useEffect(() => {
     void refresh();
+    const tick = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    const timer = window.setInterval(tick, 5000);
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', tick);
+    };
   }, [refresh]);
 
   const updateDraft = useCallback((d: Draft) => {
@@ -1534,6 +1798,25 @@ export function App() {
     },
     [refresh],
   );
+  const reply = useCallback(
+    async (c: ReviewComment, text: string) => {
+      const name = storedName();
+      if (!name) {
+        setAskName(true);
+        return;
+      }
+      await addReply(c.id, text, name);
+      await refresh();
+    },
+    [refresh],
+  );
+  const removeReply = useCallback(
+    async (c: ReviewComment, replyId: string) => {
+      await deleteReply(c.id, replyId);
+      await refresh();
+    },
+    [refresh],
+  );
   const edit = useCallback(
     async (c: ReviewComment, patch: { text: string; images?: string[] }) => {
       await patchComment(c.id, patch);
@@ -1608,6 +1891,8 @@ export function App() {
           onEdit={(c, patch) => void edit(c, patch)}
           onResolve={(c) => void resolve(c)}
           onDelete={(c) => void remove(c)}
+          onReply={reply}
+          onDeleteReply={(c, rid) => void removeReply(c, rid)}
           onClearResolved={() => void clearResolved()}
           onClose={() => {
             setSidebarOpen(false);

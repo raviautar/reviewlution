@@ -149,6 +149,48 @@ app.patch('/__review/api/comments/:id', async (req, reply) => {
   return comments[i];
 });
 
+// Replies are one level deep and live inside their comment, so a comment and
+// its thread travel together everywhere the comment does (list, journal, agents).
+app.post('/__review/api/comments/:id/replies', async (req, reply) => {
+  const c = comments.find((x) => x.id === req.params.id);
+  if (!c) {
+    reply.code(404);
+    return { error: 'not found' };
+  }
+  const body = req.body ?? {};
+  if (typeof body.text !== 'string' || !body.text.trim()) {
+    reply.code(400);
+    return { error: 'text is required' };
+  }
+  const r = {
+    id: randomUUID(),
+    text: body.text.trim(),
+    author: typeof body.author === 'string' ? body.author : undefined,
+    createdAt: Date.now(),
+  };
+  c.replies = [...(c.replies ?? []), r];
+  await persist('reply', { id: c.id, reply: r });
+  reply.code(201);
+  return c;
+});
+
+app.delete('/__review/api/comments/:id/replies/:rid', async (req, reply) => {
+  const c = comments.find((x) => x.id === req.params.id);
+  const before = c?.replies?.length ?? 0;
+  if (!c || !before) {
+    reply.code(404);
+    return { error: 'not found' };
+  }
+  c.replies = c.replies.filter((r) => r.id !== req.params.rid);
+  if (c.replies.length === before) {
+    reply.code(404);
+    return { error: 'not found' };
+  }
+  await persist('unreply', { id: c.id, rid: req.params.rid });
+  reply.code(204);
+  return null;
+});
+
 app.delete('/__review/api/comments/:id', async (req, reply) => {
   const before = comments.length;
   const removed = comments.find((c) => c.id === req.params.id);
