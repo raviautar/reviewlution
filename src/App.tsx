@@ -139,7 +139,7 @@ function PinLayer({
 }) {
   const [pins, setPins] = useState<PinPos[]>([]);
   const [pendingPos, setPendingPos] = useState<{ x: number; y: number } | null>(null);
-  const cache = useRef(new Map<string, Element>());
+  const cache = useRef(new Map<string, { el: Element; checkedAt: number }>());
   const hoverEl = useRef<Element | null>(null);
   const [outline, setOutline] = useState<Outline | null>(null);
   // Dragging a pin: pointer capture keeps the events on the pin even over the
@@ -225,7 +225,7 @@ function PinLayer({
         : mode !== 'annotate'
           ? null
           : pending
-            ? (cache.current.get('__pending') ?? null)
+            ? (cache.current.get('__pending')?.el ?? null)
             : hoverEl.current;
       const nextOutline = target?.isConnected ? outlineOf(target) : null;
       if (drag && nextOutline) nextOutline.label = `Move here: ${nextOutline.label}`;

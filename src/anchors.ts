@@ -3,6 +3,12 @@
  * resolvable selector plus the click's fractional offset inside that element's
  * box — so it stays glued to the element through scrolling and layout shifts,
  * and an agent reading the comments later knows exactly what each one is about.
+ *
+ * The selector alone is a position (`div:nth-of-type(4)`), and in a wizard the
+ * same position holds a different element on every step. So the element's own
+ * identity (tag, ids, labels, text) is stored with it and checked on every
+ * resolve: a lookalike at the same position does not get the pin, and an
+ * element that moved is found again by that identity.
  */
 
 export interface AnchorElementInfo {
@@ -54,8 +60,12 @@ export function buildSelector(el: Element): string {
   return parts.join(' > ');
 }
 
+function textOf(el: Element): string {
+  return (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 80);
+}
+
 export function describeElement(el: Element): AnchorElementInfo {
-  const text = (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 80);
+  const text = textOf(el);
   const classes = Array.from(el.classList).slice(0, 4);
   return {
     tag: el.tagName.toLowerCase(),
@@ -66,6 +76,25 @@ export function describeElement(el: Element): AnchorElementInfo {
     role: el.getAttribute('role') ?? undefined,
     text: text || undefined,
   };
+}
+
+/**
+ * Whether `el` is the element the anchor describes. Text is the main signal:
+ * exact for short labels ("Test Connection"), prefix for longer content, so a
+ * counter changing inside a card ("Executions 17" → "18") does not lose its pin
+ * but a different section at the same position does.
+ */
+export function matchesElement(el: Element, info: AnchorElementInfo): boolean {
+  if (el.tagName.toLowerCase() !== info.tag) return false;
+  if (info.id && el.id !== info.id) return false;
+  if (info.testId && el.getAttribute('data-testid') !== info.testId) return false;
+  if (info.ariaLabel && el.getAttribute('aria-label') !== info.ariaLabel) return false;
+  if (info.role && el.getAttribute('role') !== info.role) return false;
+  if (info.text === undefined) return true;
+  const text = textOf(el);
+  if (text === info.text) return true;
+  if (info.text.length < 24 || text.length < 24) return false;
+  return text.slice(0, 24) === info.text.slice(0, 24);
 }
 
 /** Build the anchor for a click at viewport coordinates inside the iframe doc. */
@@ -81,27 +110,50 @@ export function anchorAt(doc: Document, x: number, y: number): Anchor | null {
   };
 }
 
+/**
+ * The anchored element on the current page, or null. The selector is tried
+ * first; if it points at something else (a wizard step swapped the content at
+ * that position) the page is searched for the one element that matches the
+ * stored identity. Ambiguity means no pin rather than a guess.
+ */
+export function findAnchored(doc: Document, anchor: Anchor): Element | null {
+  let el: Element | null = null;
+  try {
+    el = doc.querySelector(anchor.selector);
+  } catch {
+    el = null;
+  }
+  if (el && matchesElement(el, anchor.element)) return el;
+  const info = anchor.element;
+  if (!info.text && !info.id && !info.testId && !info.ariaLabel) return null;
+  const candidates = Array.from(doc.querySelectorAll(info.tag)).filter((c) => matchesElement(c, info));
+  return candidates.length === 1 ? (candidates[0] ?? null) : null;
+}
+
 /** Where the anchored pin sits right now, in iframe-viewport coordinates. */
 export function resolveAnchor(
   doc: Document,
   anchor: Anchor,
-  cache: Map<string, Element>,
+  cache: Map<string, { el: Element; checkedAt: number }>,
   key: string,
 ): { x: number; y: number } | null {
-  let el = cache.get(key);
-  if (!el || !el.isConnected) {
-    try {
-      el = doc.querySelector(anchor.selector) ?? undefined;
-    } catch {
-      el = undefined;
-    }
-    if (!el) {
-      cache.delete(key);
-      return null;
-    }
-    cache.set(key, el);
+  const now = Date.now();
+  let hit = cache.get(key);
+  // React reuses DOM nodes across wizard steps, so a connected node can hold
+  // different content than it did; re-check its identity every few frames.
+  if (hit && (!hit.el.isConnected || (now - hit.checkedAt > 250 && !matchesElement(hit.el, anchor.element)))) {
+    cache.delete(key);
+    hit = undefined;
   }
-  const r = el.getBoundingClientRect();
+  if (!hit) {
+    const el = findAnchored(doc, anchor);
+    if (!el) return null;
+    hit = { el, checkedAt: now };
+    cache.set(key, hit);
+  } else if (now - hit.checkedAt > 250) {
+    hit.checkedAt = now;
+  }
+  const r = hit.el.getBoundingClientRect();
   if (r.width === 0 && r.height === 0) return null;
   return { x: r.left + anchor.ox * r.width, y: r.top + anchor.oy * r.height };
 }
