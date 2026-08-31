@@ -13,7 +13,7 @@ A top-level page load of any app path gets the shell; the shell iframes the same
 ## What reviewers get
 
 - Annotate mode (pencil, or ⌥C): hover outlines the element under the cursor in pink with its name; click drops a numbered pin that stays glued to that element through scrolling, layout changes and re-renders.
-- Comments with pasted or attached images and screen recordings (Record screen: drag out the area, stop whenever, the clip is attached to the comment); single-level replies; edit, resolve, reopen, delete; the list refreshes itself every few seconds.
+- Comments with pasted or attached images, area captures (Capture area: drag out part of the page, it is attached as a PNG) and screen recordings (Record screen: drag out the area, stop whenever, the clip is attached); single-level replies; edit, resolve, reopen, delete; the list refreshes itself every few seconds.
 - Pins can be dragged onto another element; a pin only shows when its element is actually on the page (identity is checked, not just position).
 - The comment list (⌥L) covers every page; a card's route chip navigates the iframe there; cards collapse to one line.
 
@@ -57,3 +57,5 @@ All under `/__review/api`:
 - `GET /healthz`.
 
 The working rule: an agent that fixes what a comment flags PATCHes it `{"resolved": true}` (or replies in-thread); a person can reopen it.
+
+Capture and recording use the browser's tab capture (`getDisplayMedia` with the current tab preferred), so they work in Chromium browsers; Safari falls back to whole-window captures.
