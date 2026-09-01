@@ -13,7 +13,7 @@ export interface Rect {
   h: number;
 }
 
-const ACCENT = '#ff1fb3';
+export const HIGHLIGHT = '#ff1fb3';
 
 function norm(a: { x: number; y: number }, e: MouseEvent): Rect {
   return {
@@ -54,7 +54,7 @@ export function selectRegion(): Promise<Rect | null> {
     Object.assign(box.style, {
       position: 'absolute',
       display: 'none',
-      border: `2px solid ${ACCENT}`,
+      border: `2px solid ${HIGHLIGHT}`,
       boxShadow: '0 0 0 9999px rgba(20,20,30,.28)',
       pointerEvents: 'none',
     });

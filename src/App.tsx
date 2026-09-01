@@ -36,7 +36,7 @@ import { ChatIcon, CloseIcon, GripIcon, ImagePlusIcon, PencilIcon } from './icon
 
 type Mode = 'view' | 'annotate';
 type Draft = { text: string; images: string[]; videos: string[] };
-type Pending = { anchor: Anchor | null; x: number; y: number; cx: number; cy: number };
+type Pending = { anchor: Anchor | null; x: number; y: number; cx: number; cy: number; page: string };
 
 const EMPTY_DRAFT: Draft = { text: '', images: [], videos: [] };
 /** Outline colour for the element under the cursor — nothing in the studio's palette is this pink. */
@@ -315,6 +315,7 @@ function PinLayer({
       y: (e.clientY / window.innerHeight) * 100,
       cx: e.clientX,
       cy: e.clientY,
+      page: route,
     });
   };
 
@@ -656,18 +657,25 @@ function CreateDialog({
   onDraft,
   onSubmit,
   onClose,
+  onCapture,
 }: {
   pending: Pending;
   draft: Draft;
   onDraft: (d: Draft) => void;
   onSubmit: () => Promise<void>;
   onClose: () => void;
+  /** True while an area is picked, captured or recorded, so the shell steps aside. */
+  onCapture: (busy: boolean) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const canSubmit = !!draft.text.trim() || draft.images.length > 0 || draft.videos.length > 0;
   const [recording, setRecording] = useState(false);
+  const capture = (b: boolean) => {
+    setRecording(b);
+    onCapture(b);
+  };
 
   const addFiles = async (files: Iterable<File>) => {
     setError(null);
@@ -826,7 +834,7 @@ function CreateDialog({
         </div>
       )}
       {error && <p style={{ margin: '8px 0 0', fontSize: 12, color: '#b3261e' }}>{error}</p>}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 10, flexWrap: 'wrap' }}>
         <input
           ref={fileInput}
           type="file"
@@ -840,34 +848,22 @@ function CreateDialog({
         />
         <SnapButton
           onDone={(url) => onDraft({ ...draft, images: [...draft.images, url] })}
-          onBusy={setRecording}
+          onBusy={capture}
           style={attachBtn}
         />
         <RecordButton
           onDone={(url) => onDraft({ ...draft, videos: [...draft.videos, url] })}
-          onBusy={setRecording}
+          onBusy={capture}
           style={attachBtn}
         />
         <button
           type="button"
           onClick={() => fileInput.current?.click()}
-          title="Attach images"
-          style={{
-            border: '1px solid #dcdae6',
-            background: '#fff',
-            color: '#4a4760',
-            borderRadius: 9,
-            height: 30,
-            padding: '0 11px',
-            fontSize: 12,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
+          title="Add images from your computer"
+          aria-label="Add images"
+          style={attachBtn}
         >
-          <ImagePlusIcon size={13} />
-          Add images
+          <ImagePlusIcon size={14} />
         </button>
         <button
           type="button"
@@ -929,7 +925,12 @@ function Sidebar({
   onDeleteReply,
   onClearResolved,
   onClose,
+  hidden,
+  onCapture,
 }: {
+  /** Kept mounted but invisible while a capture runs from one of its cards. */
+  hidden: boolean;
+  onCapture: (busy: boolean) => void;
   me: string;
   route: string;
   comments: ReviewComment[];
@@ -1010,6 +1011,7 @@ function Sidebar({
       aria-label="All comments"
       style={{
         position: 'fixed',
+        visibility: hidden ? 'hidden' : undefined,
         top: 0,
         right: 0,
         bottom: 0,
@@ -1290,6 +1292,7 @@ function Sidebar({
                   onResolve={onResolve}
                   onDelete={onDelete}
                   onReply={() => setReplyingId(c.id)}
+                  onCapture={onCapture}
                 />
                 <Replies
                   c={c}
@@ -1314,12 +1317,14 @@ function CardBody({
   onResolve,
   onDelete,
   onReply,
+  onCapture,
 }: {
   c: ReviewComment;
   onEdit: (c: ReviewComment, patch: { text: string; images?: string[]; videos?: string[] }) => void;
   onResolve: (c: ReviewComment) => void;
   onDelete: (c: ReviewComment) => void;
   onReply: () => void;
+  onCapture: (busy: boolean) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
@@ -1443,14 +1448,28 @@ function CardBody({
             e.target.value = '';
           }}
         />
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button type="button" style={sideBtn} onClick={() => fileInput.current?.click()}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <ImagePlusIcon size={12} /> Add images
-            </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+          <SnapButton
+            onDone={(url) => setImages((cur) => [...cur, url])}
+            onBusy={onCapture}
+            style={sideIconBtn}
+            iconSize={13}
+          />
+          <RecordButton
+            onDone={(url) => setVideos((cur) => [...cur, url])}
+            onBusy={onCapture}
+            style={sideIconBtn}
+            iconSize={13}
+          />
+          <button
+            type="button"
+            style={sideIconBtn}
+            onClick={() => fileInput.current?.click()}
+            title="Add images from your computer"
+            aria-label="Add images"
+          >
+            <ImagePlusIcon size={13} />
           </button>
-          <SnapButton onDone={(url) => setImages((cur) => [...cur, url])} style={sideBtn} />
-          <RecordButton onDone={(url) => setVideos((cur) => [...cur, url])} style={sideBtn} />
           <button
             type="button"
             style={{ ...sideBtn, marginLeft: 'auto', background: ACCENT, color: '#fff', border: 'none' }}
@@ -1557,16 +1576,20 @@ const removeBtn = {
   padding: 0,
 } as const;
 
+/** Square icon buttons for attachments, so the row stays one line inside the popover. */
 const attachBtn = {
+  width: 30,
+  height: 30,
   border: '1px solid #dcdae6',
   background: '#fff',
   color: '#4a4760',
   borderRadius: 9,
-  height: 30,
-  padding: '0 11px',
-  fontSize: 12,
   cursor: 'pointer',
-  fontFamily: 'inherit',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+  flex: 'none',
 } as const;
 
 const sideBtn = {
@@ -1579,6 +1602,16 @@ const sideBtn = {
   fontSize: 11.5,
   fontWeight: 600,
   cursor: 'pointer',
+} as const;
+
+const sideIconBtn = {
+  ...sideBtn,
+  width: 26,
+  padding: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flex: 'none',
 } as const;
 
 /** The one-level thread under a comment; the box to add to it opens from the card's Reply button. */
@@ -1811,6 +1844,14 @@ export function App() {
   const [focusId, setFocusId] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [askName, setAskName] = useState(false);
+  // A capture or recording in progress: pins and chrome step aside so the page
+  // is live (and out of the clip) until it ends.
+  const [capturing, setCapturing] = useState(false);
+  const capturingRef = useRef(false);
+  const setCapture = useCallback((b: boolean) => {
+    capturingRef.current = b;
+    setCapturing(b);
+  }, []);
 
   // Comments are shared state: everyone's resolves, replies and new pins show
   // up here without a reload. Polled while the tab is visible; an unchanged
@@ -1867,6 +1908,8 @@ export function App() {
   // stray keypress while browsing can never trigger them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Escape and the chords would unmount the dialog that owns the recording.
+      if (capturingRef.current) return;
       if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === 'KeyC') {
         e.preventDefault();
         toggleMode();
@@ -1940,7 +1983,7 @@ export function App() {
       createdAt: Date.now(),
       color: ACCENT,
       author: storedName() ?? author ?? 'Anonymous',
-      page: route,
+      page: pending.page,
       images: draft.images.length ? draft.images : undefined,
       videos: draft.videos.length ? draft.videos : undefined,
       anchor: pending.anchor ?? undefined,
@@ -1950,7 +1993,7 @@ export function App() {
     setPending(null);
     setMode('view');
     await refresh();
-  }, [pending, draft, author, route, refresh, updateDraft]);
+  }, [pending, draft, author, refresh, updateDraft]);
 
   const openComment = useCallback(
     (c: ReviewComment) => {
@@ -2035,8 +2078,8 @@ export function App() {
         iframeRef={iframeRef}
         comments={comments}
         route={route}
-        mode={mode}
-        pending={pending}
+        mode={capturing ? 'view' : mode}
+        pending={capturing ? null : pending}
         hoverId={hoverId ?? focusId}
         onPlace={setPending}
         onPinClick={(id) => {
@@ -2052,19 +2095,24 @@ export function App() {
           onDraft={updateDraft}
           onSubmit={submit}
           onClose={() => setPending(null)}
+          onCapture={setCapture}
         />
       )}
-      <Bubble
-        author={author}
-        mode={mode}
-        count={comments.length}
-        sidebarOpen={sidebarOpen}
-        onToggleMode={toggleMode}
-        onChangeName={() => setAskName(true)}
-        onToggleSidebar={() => setSidebarOpen((o) => !o)}
-      />
+      {!capturing && (
+        <Bubble
+          author={author}
+          mode={mode}
+          count={comments.length}
+          sidebarOpen={sidebarOpen}
+          onToggleMode={toggleMode}
+          onChangeName={() => setAskName(true)}
+          onToggleSidebar={() => setSidebarOpen((o) => !o)}
+        />
+      )}
       {sidebarOpen && (
         <Sidebar
+          hidden={capturing}
+          onCapture={setCapture}
           me={author ?? 'Anonymous'}
           route={route}
           comments={comments}

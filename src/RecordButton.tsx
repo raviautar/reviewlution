@@ -1,12 +1,14 @@
 /**
  * "Record screen" for a comment: choose an area, record it, stop whenever, and
- * hand the uploaded clip's URL back to the form. While recording, a small pill
- * at the bottom of the page shows the time and the Stop button.
+ * hand the uploaded clip's URL back to the form. While recording the page is
+ * live (the shell steps aside through onBusy), the chosen area is framed, and a
+ * bar kept clear of that area shows the time and the Stop button.
  */
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { uploadVideo } from './api.js';
-import { type Recording, selectRegion, startRecording } from './recorder.js';
+import { RecordIcon, StopIcon } from './icons.js';
+import { HIGHLIGHT, type Recording, type Rect, selectRegion, startRecording } from './recorder.js';
 
 type Phase = 'idle' | 'selecting' | 'recording' | 'uploading';
 
@@ -17,15 +19,19 @@ export function RecordButton({
   onDone,
   onBusy,
   style,
+  iconSize = 14,
 }: {
   onDone: (url: string) => void;
-  /** Called with true while selecting, recording or saving, so the form can step aside. */
+  /** Called with true while selecting, recording or saving, so the shell can step aside. */
   onBusy?: (busy: boolean) => void;
   style?: CSSProperties;
+  iconSize?: number;
 }) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  /** The recorded area when the clip is cropped to it; null when the whole capture is kept. */
+  const [area, setArea] = useState<Rect | null>(null);
   const rec = useRef<Recording | null>(null);
   const busyRef = useRef(onBusy);
   busyRef.current = onBusy;
@@ -55,6 +61,7 @@ export function RecordButton({
     } catch {
       setError('Saving the recording failed.');
     } finally {
+      setArea(null);
       setPhase('idle');
     }
   };
@@ -71,6 +78,7 @@ export function RecordButton({
       const r = await startRecording(rect);
       rec.current = r;
       r.onEnded(() => void finish());
+      setArea(r.cropped ? rect : null);
       setElapsed(0);
       setPhase('recording');
     } catch (e) {
@@ -84,53 +92,14 @@ export function RecordButton({
   };
 
   const hud =
-    phase === 'recording'
+    phase === 'recording' || phase === 'uploading'
       ? createPortal(
-          <div
-            style={{
-              position: 'fixed',
-              left: '50%',
-              bottom: 22,
-              transform: 'translateX(-50%)',
-              zIndex: 2147483001,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '7px 8px 7px 14px',
-              borderRadius: 999,
-              background: '#1b1926',
-              color: '#fff',
-              boxShadow: '0 10px 30px -10px rgba(20,20,30,.6)',
-              font: '600 12.5px system-ui, sans-serif',
-            }}
-          >
-            <span
-              style={{
-                width: 9,
-                height: 9,
-                borderRadius: '50%',
-                background: '#e5484d',
-                boxShadow: '0 0 0 4px rgba(229,72,77,.3)',
-              }}
-            />
-            Recording {fmt(elapsed)}
-            <button
-              type="button"
-              onClick={() => void finish()}
-              style={{
-                border: 'none',
-                borderRadius: 999,
-                background: '#fff',
-                color: '#1b1926',
-                padding: '5px 12px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                font: 'inherit',
-              }}
-            >
-              Stop
-            </button>
-          </div>,
+          <RecordingHud
+            area={area}
+            elapsed={elapsed}
+            saving={phase === 'uploading'}
+            onStop={() => void finish()}
+          />,
           document.body,
         )
       : null;
@@ -139,15 +108,119 @@ export function RecordButton({
     <>
       <button
         type="button"
-        style={style}
+        style={{ ...style, opacity: phase === 'idle' ? undefined : 0.5 }}
         disabled={phase !== 'idle'}
         onClick={() => void begin()}
-        title="Record part of the screen and attach the clip to this comment"
+        title="Record screen: drag out an area, use the page as usual, stop from the bar at the top; the clip is attached here"
+        aria-label="Record screen"
       >
-        {phase === 'uploading' ? 'Saving clip…' : phase === 'recording' ? 'Recording…' : 'Record screen'}
+        <RecordIcon size={iconSize} />
       </button>
       {error && <span style={{ fontSize: 11.5, color: '#b3261e' }}>{error}</span>}
       {hud}
+    </>
+  );
+}
+
+/** The frame around the recorded area and the bar with the clock and Stop. */
+function RecordingHud({
+  area,
+  elapsed,
+  saving,
+  onStop,
+}: {
+  area: Rect | null;
+  elapsed: number;
+  saving: boolean;
+  onStop: () => void;
+}) {
+  // The bar sits above the recorded area when there is room, below it otherwise,
+  // so it stays out of the clip; a full-page recording gets it at the top.
+  const atTop = !area || area.y >= 64 || area.y + area.h > window.innerHeight - 64;
+  return (
+    <>
+      <style>{'@keyframes washi-rec{0%,100%{opacity:1}50%{opacity:.25}}'}</style>
+      {area && (
+        <div
+          data-washi-rec-frame
+          style={{
+            position: 'fixed',
+            left: area.x - 3,
+            top: area.y - 3,
+            width: area.w + 6,
+            height: area.h + 6,
+            boxSizing: 'border-box',
+            border: `3px solid ${HIGHLIGHT}`,
+            borderRadius: 5,
+            pointerEvents: 'none',
+            zIndex: 2147483001,
+          }}
+        />
+      )}
+      <div
+        role="status"
+        data-washi-rec-bar
+        style={{
+          position: 'fixed',
+          left: '50%',
+          ...(atTop ? { top: 14 } : { bottom: 14 }),
+          transform: 'translateX(-50%)',
+          zIndex: 2147483002,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          maxWidth: 'calc(100vw - 24px)',
+          padding: '8px 8px 8px 16px',
+          borderRadius: 999,
+          background: '#1b1926',
+          color: '#fff',
+          boxShadow: `0 12px 34px -10px rgba(20,20,30,.65), 0 0 0 2px ${HIGHLIGHT}55`,
+          font: '600 13px system-ui, sans-serif',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <span
+          style={{
+            width: 10,
+            height: 10,
+            borderRadius: '50%',
+            background: '#e5484d',
+            boxShadow: '0 0 0 4px rgba(229,72,77,.3)',
+            animation: saving ? undefined : 'washi-rec 1.2s ease-in-out infinite',
+            flex: 'none',
+          }}
+        />
+        {saving ? (
+          <span>Saving the clip…</span>
+        ) : (
+          <>
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>Recording {fmt(elapsed)}</span>
+            <span style={{ fontWeight: 500, color: '#c9c6d6' }}>
+              The page is live, click and scroll as usual.
+            </span>
+            <button
+              type="button"
+              onClick={onStop}
+              style={{
+                border: 'none',
+                borderRadius: 999,
+                background: '#fff',
+                color: '#1b1926',
+                padding: '7px 14px 7px 11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                font: 'inherit',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <StopIcon size={13} />
+              Stop &amp; attach to comment
+            </button>
+          </>
+        )}
+      </div>
     </>
   );
 }

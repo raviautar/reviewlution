@@ -4,6 +4,7 @@
  */
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { uploadImage } from './api.js';
+import { CameraIcon } from './icons.js';
 import { captureRegion, selectRegion } from './recorder.js';
 
 type Phase = 'idle' | 'selecting' | 'capturing';
@@ -12,10 +13,13 @@ export function SnapButton({
   onDone,
   onBusy,
   style,
+  iconSize = 14,
 }: {
   onDone: (url: string) => void;
+  /** Called with true while an area is picked or captured, so the shell can step aside. */
   onBusy?: (busy: boolean) => void;
   style?: CSSProperties;
+  iconSize?: number;
 }) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -53,12 +57,13 @@ export function SnapButton({
     <>
       <button
         type="button"
-        style={style}
+        style={{ ...style, opacity: phase === 'idle' ? undefined : 0.5 }}
         disabled={phase !== 'idle'}
         onClick={() => void begin()}
-        title="Capture part of the screen and attach it as an image"
+        title="Capture area: drag out part of the page, it is attached as an image"
+        aria-label="Capture area"
       >
-        {phase === 'capturing' ? 'Capturing…' : 'Capture area'}
+        <CameraIcon size={iconSize} />
       </button>
       {error && <span style={{ fontSize: 11.5, color: '#b3261e' }}>{error}</span>}
     </>
