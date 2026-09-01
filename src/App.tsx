@@ -1593,13 +1593,11 @@ const removeBtn = {
   padding: 0,
 } as const;
 
-/** Borderless icon buttons for attachments (hover tint via .washi-ibtn in index.html). */
+/** Borderless icon buttons for attachments; colours and hover come from .washi-ibtn in index.html. */
 const attachBtn = {
   width: 28,
   height: 28,
   border: 'none',
-  background: 'transparent',
-  color: '#6b6880',
   borderRadius: 8,
   cursor: 'pointer',
   display: 'inline-flex',
