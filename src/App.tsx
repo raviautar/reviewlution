@@ -834,7 +834,16 @@ function CreateDialog({
         </div>
       )}
       {error && <p style={{ margin: '8px 0 0', fontSize: 12, color: '#b3261e' }}>{error}</p>}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 10, flexWrap: 'wrap' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 2,
+          marginTop: 8,
+          marginLeft: -6,
+          flexWrap: 'wrap',
+        }}
+      >
         <input
           ref={fileInput}
           type="file"
@@ -850,20 +859,25 @@ function CreateDialog({
           onDone={(url) => onDraft({ ...draft, images: [...draft.images, url] })}
           onBusy={capture}
           style={attachBtn}
+          className="washi-ibtn"
+          iconSize={15}
         />
         <RecordButton
           onDone={(url) => onDraft({ ...draft, videos: [...draft.videos, url] })}
           onBusy={capture}
           style={attachBtn}
+          className="washi-ibtn"
+          iconSize={15}
         />
         <button
           type="button"
+          className="washi-ibtn"
           onClick={() => fileInput.current?.click()}
           title="Add images from your computer"
           aria-label="Add images"
           style={attachBtn}
         >
-          <ImagePlusIcon size={14} />
+          <ImagePlusIcon size={15} />
         </button>
         <button
           type="button"
@@ -1448,27 +1462,30 @@ function CardBody({
             e.target.value = '';
           }}
         />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: -5, flexWrap: 'wrap' }}>
           <SnapButton
             onDone={(url) => setImages((cur) => [...cur, url])}
             onBusy={onCapture}
             style={sideIconBtn}
-            iconSize={13}
+            className="washi-ibtn"
+            iconSize={14}
           />
           <RecordButton
             onDone={(url) => setVideos((cur) => [...cur, url])}
             onBusy={onCapture}
             style={sideIconBtn}
-            iconSize={13}
+            className="washi-ibtn"
+            iconSize={14}
           />
           <button
             type="button"
+            className="washi-ibtn"
             style={sideIconBtn}
             onClick={() => fileInput.current?.click()}
             title="Add images from your computer"
             aria-label="Add images"
           >
-            <ImagePlusIcon size={13} />
+            <ImagePlusIcon size={14} />
           </button>
           <button
             type="button"
@@ -1576,14 +1593,14 @@ const removeBtn = {
   padding: 0,
 } as const;
 
-/** Square icon buttons for attachments, so the row stays one line inside the popover. */
+/** Borderless icon buttons for attachments (hover tint via .washi-ibtn in index.html). */
 const attachBtn = {
-  width: 30,
-  height: 30,
-  border: '1px solid #dcdae6',
-  background: '#fff',
-  color: '#4a4760',
-  borderRadius: 9,
+  width: 28,
+  height: 28,
+  border: 'none',
+  background: 'transparent',
+  color: '#6b6880',
+  borderRadius: 8,
   cursor: 'pointer',
   display: 'inline-flex',
   alignItems: 'center',
@@ -1604,15 +1621,7 @@ const sideBtn = {
   cursor: 'pointer',
 } as const;
 
-const sideIconBtn = {
-  ...sideBtn,
-  width: 26,
-  padding: 0,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flex: 'none',
-} as const;
+const sideIconBtn = { ...attachBtn, width: 26, height: 26 } as const;
 
 /** The one-level thread under a comment; the box to add to it opens from the card's Reply button. */
 function Replies({

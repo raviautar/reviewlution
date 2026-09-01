@@ -19,12 +19,14 @@ export function RecordButton({
   onDone,
   onBusy,
   style,
+  className,
   iconSize = 14,
 }: {
   onDone: (url: string) => void;
   /** Called with true while selecting, recording or saving, so the shell can step aside. */
   onBusy?: (busy: boolean) => void;
   style?: CSSProperties;
+  className?: string;
   iconSize?: number;
 }) {
   const [phase, setPhase] = useState<Phase>('idle');
@@ -108,6 +110,7 @@ export function RecordButton({
     <>
       <button
         type="button"
+        className={className}
         style={{ ...style, opacity: phase === 'idle' ? undefined : 0.5 }}
         disabled={phase !== 'idle'}
         onClick={() => void begin()}
