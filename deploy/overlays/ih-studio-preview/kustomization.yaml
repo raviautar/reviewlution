@@ -8,24 +8,19 @@ resources:
 images:
   - name: ghcr.io/raviautar/review-toolbar
     newName: wandserviceplatform.azurecr.io/images/review-toolbar
-    newTag: "7e93b2c"
+    newTag: "0bbde61"
 patches:
   - target:
       kind: PersistentVolumeClaim
       name: review-toolbar-data
     patch: |
-      $patch: delete
-      apiVersion: v1
-      kind: PersistentVolumeClaim
-      metadata:
-        name: review-toolbar-data
+      - op: add
+        path: /spec/storageClassName
+        value: managed-csi
   - target:
       kind: Deployment
       name: review-toolbar
     patch: |
-      - op: replace
-        path: /spec/template/spec/volumes/0/persistentVolumeClaim/claimName
-        value: washi-review-data
       - op: replace
         path: /spec/template/spec/containers/0/env
         value:
