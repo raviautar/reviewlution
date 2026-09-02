@@ -998,6 +998,25 @@ function Sidebar({
     cardRefs.current.get(focusId)?.scrollIntoView({ block: 'center' });
   }, [focusId, comments]);
 
+  const [copiedTick, setCopiedTick] = useState(false);
+  const copyShown = () => {
+    const lines = shown.map(({ c, n }) => {
+      const status = c.resolved ? 'resolved' : 'open';
+      const head = `### #${n} · ${c.page ?? '/'} · ${status}${c.author ? ` · ${c.author}` : ''}`;
+      const replies = (c.replies ?? []).map((r) => `> ${r.author ?? 'reply'}: ${r.text}`);
+      const media = [
+        ...(c.images ?? []).map((u) => `image: ${u}`),
+        ...(c.videos ?? []).map((u) => `video: ${u}`),
+      ];
+      return [head, c.text, ...media, ...replies].join('\n');
+    });
+    const doc = `## ${tab === 'resolved' ? 'Resolved' : 'Open'} comments (${shown.length})\n\n${lines.join('\n\n')}\n`;
+    void navigator.clipboard.writeText(doc).then(() => {
+      setCopiedTick(true);
+      window.setTimeout(() => setCopiedTick(false), 1600);
+    });
+  };
+
   const tabBtn = (key: 'open' | 'resolved', label: string) => (
     <button
       type="button"
@@ -1052,6 +1071,42 @@ function Sidebar({
         {shown.length > 0 && (
           <button
             type="button"
+            onClick={copyShown}
+            title={`Copy the ${tab === 'resolved' ? 'resolved' : 'open'} comments as text`}
+            aria-label="Copy the listed comments"
+            style={{
+              marginLeft: 'auto',
+              border: 'none',
+              background: 'transparent',
+              color: copiedTick ? '#2e7d32' : '#8a879a',
+              cursor: 'pointer',
+              padding: 2,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 11,
+            }}
+          >
+            {copiedTick && 'Copied'}
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <rect x="9" y="9" width="12" height="12" rx="2" />
+              <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+            </svg>
+          </button>
+        )}
+        {shown.length > 0 && (
+          <button
+            type="button"
             onClick={() => {
               const next = new Set(collapsed);
               for (const { c } of shown) {
@@ -1063,7 +1118,6 @@ function Sidebar({
             title={allFolded ? 'Expand all comments' : 'Collapse all comments to one line'}
             aria-label={allFolded ? 'Expand all comments' : 'Collapse all comments'}
             style={{
-              marginLeft: 'auto',
               border: 'none',
               background: 'transparent',
               color: '#8a879a',
