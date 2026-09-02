@@ -1008,7 +1008,24 @@ function Sidebar({
         ...(c.images ?? []).map((u) => `image: ${u}`),
         ...(c.videos ?? []).map((u) => `video: ${u}`),
       ];
-      return [head, c.text, ...media, ...replies].join('\n');
+      // Where the pin sits, in terms an agent can find in the codebase.
+      const where: string[] = [];
+      if (c.anchor) {
+        const el = c.anchor.element;
+        const idy = [
+          `${el.tag}${el.id ? `#${el.id}` : ''}${el.classes?.length ? `.${el.classes.join('.')}` : ''}`,
+          el.testId ? `[data-testid="${el.testId}"]` : '',
+          el.role ? `[role="${el.role}"]` : '',
+          el.ariaLabel ? `[aria-label="${el.ariaLabel}"]` : '',
+          el.text ? `· "${el.text}"` : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
+        where.push(`element: ${idy}`, `selector: ${c.anchor.selector}`);
+      } else {
+        where.push(`position: ${Math.round(c.x)}%,${Math.round(c.y)}% of the viewport (no element anchor)`);
+      }
+      return [head, c.text, ...where, ...media, ...replies].join('\n');
     });
     const doc = `## ${tab === 'resolved' ? 'Resolved' : 'Open'} comments (${shown.length})\n\n${lines.join('\n\n')}\n`;
     void navigator.clipboard.writeText(doc).then(() => {
