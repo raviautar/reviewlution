@@ -8,7 +8,7 @@ resources:
 images:
   - name: ghcr.io/raviautar/washi-toolbar
     newName: wandserviceplatform.azurecr.io/images/washi-toolbar
-    newTag: 5d4fee4
+    newTag: f4237b3
 patches:
   - target:
       kind: PersistentVolumeClaim
