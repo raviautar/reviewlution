@@ -6,22 +6,22 @@ namespace: ih-studio-preview
 resources:
   - ../../base
 images:
-  - name: ghcr.io/raviautar/washi-toolbar
-    newName: wandserviceplatform.azurecr.io/images/washi-toolbar
+  - name: ghcr.io/raviautar/review-toolbar
+    newName: wandserviceplatform.azurecr.io/images/review-toolbar
     newTag: "7e93b2c"
 patches:
   - target:
       kind: PersistentVolumeClaim
-      name: washi-toolbar-data
+      name: review-toolbar-data
     patch: |
       $patch: delete
       apiVersion: v1
       kind: PersistentVolumeClaim
       metadata:
-        name: washi-toolbar-data
+        name: review-toolbar-data
   - target:
       kind: Deployment
-      name: washi-toolbar
+      name: review-toolbar
     patch: |
       - op: replace
         path: /spec/template/spec/volumes/0/persistentVolumeClaim/claimName
@@ -39,7 +39,7 @@ patches:
             value: Studio preview · Review
   - target:
       kind: Ingress
-      name: washi-toolbar
+      name: review-toolbar
     patch: |
       - op: add
         path: /spec/ingressClassName

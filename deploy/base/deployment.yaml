@@ -1,24 +1,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: washi-toolbar
+  name: review-toolbar
   labels:
-    app.kubernetes.io/name: washi-toolbar
+    app.kubernetes.io/name: review-toolbar
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: washi-toolbar
+      app: review-toolbar
   template:
     metadata:
       labels:
-        app: washi-toolbar
+        app: review-toolbar
     spec:
       containers:
-        - name: washi-toolbar
-          image: ghcr.io/raviautar/washi-toolbar:latest
+        - name: review-toolbar
+          image: ghcr.io/raviautar/review-toolbar:latest
           ports:
             - containerPort: 8090
               protocol: TCP
@@ -56,4 +56,4 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: washi-toolbar-data
+            claimName: review-toolbar-data

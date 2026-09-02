@@ -1,5 +1,5 @@
 {
-  "name": "washi-toolbar",
+  "name": "review-toolbar",
   "private": true,
   "version": "0.1.0",
   "description": "Review toolbar for web app previews: proxies the app same-origin and overlays element-anchored comment pins, replies and a comments API for agents.",

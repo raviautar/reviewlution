@@ -76,7 +76,7 @@ function persistDraft(d: Draft) {
 const CONFIG: { defaultRoute: string; title: string } = {
   defaultRoute: '/',
   title: 'Preview · Review',
-  ...((window as Window & { __WASHI__?: Partial<{ defaultRoute: string; title: string }> }).__WASHI__ ??
+  ...((window as Window & { __REVIEW_TOOLBAR__?: Partial<{ defaultRoute: string; title: string }> }).__REVIEW_TOOLBAR__ ??
     {}),
 };
 
@@ -1053,19 +1053,19 @@ function CreateDialog({
           onDone={(url) => onDraft({ ...draft, images: [...draft.images, url] })}
           onBusy={capture}
           style={attachBtn}
-          className="washi-ibtn"
+          className="rt-ibtn"
           iconSize={15}
         />
         <RecordButton
           onDone={(url) => onDraft({ ...draft, videos: [...draft.videos, url] })}
           onBusy={capture}
           style={attachBtn}
-          className="washi-ibtn"
+          className="rt-ibtn"
           iconSize={15}
         />
         <button
           type="button"
-          className="washi-ibtn"
+          className="rt-ibtn"
           onClick={() => fileInput.current?.click()}
           title="Add images from your computer"
           aria-label="Add images"
@@ -1099,7 +1099,7 @@ function CreateDialog({
 
 /* ------------------------------------------------------------- the sidebar */
 
-const COLLAPSED_KEY = 'washi-review-collapsed';
+const COLLAPSED_KEY = 'review-toolbar-collapsed';
 
 function storedCollapsed(): Set<string> {
   try {
@@ -1738,19 +1738,19 @@ function CardBody({
             onDone={(url) => setImages((cur) => [...cur, url])}
             onBusy={onCapture}
             style={sideIconBtn}
-            className="washi-ibtn"
+            className="rt-ibtn"
             iconSize={14}
           />
           <RecordButton
             onDone={(url) => setVideos((cur) => [...cur, url])}
             onBusy={onCapture}
             style={sideIconBtn}
-            className="washi-ibtn"
+            className="rt-ibtn"
             iconSize={14}
           />
           <button
             type="button"
-            className="washi-ibtn"
+            className="rt-ibtn"
             style={sideIconBtn}
             onClick={() => fileInput.current?.click()}
             title="Add images from your computer"
@@ -1867,7 +1867,7 @@ const removeBtn = {
   padding: 0,
 } as const;
 
-/** Borderless icon buttons for attachments; colours and hover come from .washi-ibtn in index.html. */
+/** Borderless icon buttons for attachments; colours and hover come from .rt-ibtn in index.html. */
 const attachBtn = {
   width: 28,
   height: 28,

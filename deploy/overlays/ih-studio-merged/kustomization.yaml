@@ -6,20 +6,20 @@ namespace: ih-studio-merged
 resources:
   - ../../base
 images:
-  - name: ghcr.io/raviautar/washi-toolbar
-    newName: wandserviceplatform.azurecr.io/images/washi-toolbar
+  - name: ghcr.io/raviautar/review-toolbar
+    newName: wandserviceplatform.azurecr.io/images/review-toolbar
     newTag: "7e93b2c"
 patches:
   - target:
       kind: PersistentVolumeClaim
-      name: washi-toolbar-data
+      name: review-toolbar-data
     patch: |
       - op: add
         path: /spec/storageClassName
         value: managed-csi
   - target:
       kind: Deployment
-      name: washi-toolbar
+      name: review-toolbar
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/env
@@ -34,7 +34,7 @@ patches:
             value: Studio merged preview · Review
   - target:
       kind: Ingress
-      name: washi-toolbar
+      name: review-toolbar
     patch: |
       - op: add
         path: /spec/ingressClassName

@@ -1,9 +1,9 @@
-# washi-toolbar
+# review-toolbar
 
 A review toolbar for web app previews. It sits in front of the app as a reverse proxy, shows the app in a same-origin iframe, and lets reviewers pin comments to the elements they are looking at. Agents read and answer the same comments through a small JSON API.
 
 ```
-browser ──► washi-toolbar (:8090) ──► your app (UPSTREAM)
+browser ──► review-toolbar (:8090) ──► your app (UPSTREAM)
               │  /__review/*   shell assets + comments API (own origin, /data volume)
               └─ everything else is proxied to the app, unchanged
 ```
@@ -43,7 +43,7 @@ The server caches the built `dist/index.html`; after a rebuild, restart it.
 kubectl apply -k deploy/overlays/ih-studio-preview
 ```
 
-Images are published to `ghcr.io/raviautar/washi-toolbar:<sha>` on every push to `main` (`.github/workflows/publish.yaml`). Clusters that pull from another registry retag the image there.
+Images are published to `ghcr.io/raviautar/review-toolbar:<sha>` on every push to `main` (`.github/workflows/publish.yaml`). Clusters that pull from another registry retag the image there.
 
 ## API for agents
 

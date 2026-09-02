@@ -64,7 +64,7 @@ function shellWithConfig(html) {
   const config = JSON.stringify({ defaultRoute: DEFAULT_ROUTE, title: APP_TITLE }).replace(/</g, '\\u003c');
   return html
     .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(APP_TITLE)}</title>`)
-    .replace('</head>', `<script>window.__WASHI__=${config}</script></head>`);
+    .replace('</head>', `<script>window.__REVIEW_TOOLBAR__=${config}</script></head>`);
 }
 app.addHook('onRequest', async (req, reply) => {
   const isDocument = req.headers['sec-fetch-dest'] === 'document';

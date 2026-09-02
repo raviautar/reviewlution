@@ -142,10 +142,10 @@ function RecordingHud({
   const atTop = !area || area.y >= 64 || area.y + area.h > window.innerHeight - 64;
   return (
     <>
-      <style>{'@keyframes washi-rec{0%,100%{opacity:1}50%{opacity:.25}}'}</style>
+      <style>{'@keyframes rt-rec{0%,100%{opacity:1}50%{opacity:.25}}'}</style>
       {area && (
         <div
-          data-washi-rec-frame
+          data-rt-rec-frame
           style={{
             position: 'fixed',
             left: area.x - 3,
@@ -162,7 +162,7 @@ function RecordingHud({
       )}
       <div
         role="status"
-        data-washi-rec-bar
+        data-rt-rec-bar
         style={{
           position: 'fixed',
           left: '50%',
@@ -189,7 +189,7 @@ function RecordingHud({
             borderRadius: '50%',
             background: '#e5484d',
             boxShadow: '0 0 0 4px rgba(229,72,77,.3)',
-            animation: saving ? undefined : 'washi-rec 1.2s ease-in-out infinite',
+            animation: saving ? undefined : 'rt-rec 1.2s ease-in-out infinite',
             flex: 'none',
           }}
         />

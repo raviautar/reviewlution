@@ -2,9 +2,27 @@
 import type { Anchor } from './anchors.js';
 
 export const ACCENT = '#5b2fcc';
-export const AUTHOR_KEY = 'washi-review-author';
-export const POS_KEY = 'washi-review-bubble-pos';
-export const DRAFT_KEY = 'washi-review-draft';
+// The shell was called washi until 2026-09-02; carry a reviewer's name, bubble
+// position, draft and collapsed cards across the rename once.
+for (const [key, old] of [
+  ['review-toolbar-author', 'washi-review-author'],
+  ['review-toolbar-bubble-pos', 'washi-review-bubble-pos'],
+  ['review-toolbar-draft', 'washi-review-draft'],
+  ['review-toolbar-collapsed', 'washi-review-collapsed'],
+]) {
+  try {
+    if (localStorage.getItem(key) === null) {
+      const v = localStorage.getItem(old);
+      if (v !== null) localStorage.setItem(key, v);
+    }
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+export const AUTHOR_KEY = 'review-toolbar-author';
+export const POS_KEY = 'review-toolbar-bubble-pos';
+export const DRAFT_KEY = 'review-toolbar-draft';
 const API = '/__review/api/comments';
 const IMAGES_API = '/__review/api/images';
 const VIDEOS_API = '/__review/api/videos';
