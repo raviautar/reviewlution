@@ -1830,9 +1830,12 @@ function CardBody({
         <button type="button" style={sideBtn} onClick={start}>
           Edit
         </button>
-        <button type="button" style={{ ...sideBtn, color: '#b3261e' }} onClick={() => onDelete(c)}>
-          Delete
-        </button>
+        <ConfirmDelete
+          label="Delete"
+          ariaLabel="Delete comment"
+          style={{ ...sideBtn, color: '#b3261e' }}
+          onConfirm={() => onDelete(c)}
+        />
       </div>
     </>
   );
@@ -1877,6 +1880,65 @@ const attachBtn = {
   padding: 0,
   flex: 'none',
 } as const;
+
+/**
+ * Delete takes two presses: the first turns the control into a red "Delete?"
+ * and the second does it. Moving the pointer away, pressing Escape or waiting
+ * three seconds puts it back — a list that shifts under a double-click must
+ * not take the next card with it.
+ */
+function ConfirmDelete({
+  onConfirm,
+  label,
+  armedLabel = 'Delete?',
+  style,
+  icon,
+  ariaLabel,
+}: {
+  onConfirm: () => void;
+  /** The idle face — text, or an icon when `icon` is set. */
+  label?: string;
+  armedLabel?: string;
+  style?: React.CSSProperties;
+  icon?: React.ReactNode;
+  ariaLabel?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = window.setTimeout(() => setArmed(false), 3000);
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setArmed(false);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [armed]);
+  return (
+    <button
+      type="button"
+      aria-label={armed ? `Confirm: ${ariaLabel ?? label ?? 'delete'}` : (ariaLabel ?? label)}
+      title={armed ? 'Press again to delete' : ariaLabel}
+      onClick={() => {
+        if (!armed) {
+          setArmed(true);
+          return;
+        }
+        setArmed(false);
+        onConfirm();
+      }}
+      onMouseLeave={() => setArmed(false)}
+      style={{
+        ...style,
+        ...(armed
+          ? { color: '#fff', background: '#b3261e', borderColor: '#b3261e', fontWeight: 700 }
+          : undefined),
+      }}
+    >
+      {armed ? armedLabel : (icon ?? label)}
+    </button>
+  );
+}
 
 const sideBtn = {
   border: '1px solid #e2e0ea',
@@ -1932,23 +1994,24 @@ function Replies({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <b style={{ fontSize: 12, color: '#1b1926' }}>{r.author ?? 'Anonymous'}</b>
             <span style={{ fontSize: 10.5, color: '#8a879a' }}>{timeAgo(r.createdAt)}</span>
-            <button
-              type="button"
-              aria-label="Delete reply"
-              title="Delete reply"
-              onClick={() => onDeleteReply(c, r.id)}
+            <ConfirmDelete
+              ariaLabel="Delete reply"
+              armedLabel="Delete?"
+              icon={<CloseIcon size={9} />}
+              onConfirm={() => onDeleteReply(c, r.id)}
               style={{
                 marginLeft: 'auto',
                 border: 'none',
                 background: 'transparent',
                 color: '#a5a2b3',
                 cursor: 'pointer',
-                padding: 2,
+                padding: '2px 4px',
+                borderRadius: 6,
+                fontSize: 10.5,
                 display: 'inline-flex',
+                alignItems: 'center',
               }}
-            >
-              <CloseIcon size={9} />
-            </button>
+            />
           </div>
           <p
             style={{
