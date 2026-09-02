@@ -33,6 +33,8 @@ export interface ReviewComment {
   videos?: string[];
   /** Element anchoring — pins glue to the element, and agents get the context. */
   anchor?: Anchor;
+  /** Every element the comment is about, when there is more than one; `anchor` is the first. */
+  anchors?: Anchor[];
   replies?: Reply[];
 }
 

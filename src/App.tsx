@@ -29,14 +29,23 @@ import {
   uploadImage,
   type ReviewComment,
 } from './api.js';
-import { anchorAt, resolveAnchor, type Anchor } from './anchors.js';
+import { anchorAt, anchorFor, elementsInRect, resolveAnchor, type Anchor, type Box } from './anchors.js';
 import { RecordButton } from './RecordButton.js';
 import { SnapButton } from './SnapButton.js';
 import { ChatIcon, CloseIcon, GripIcon, ImagePlusIcon, PencilIcon } from './icons.js';
 
 type Mode = 'view' | 'annotate';
 type Draft = { text: string; images: string[]; videos: string[] };
-type Pending = { anchor: Anchor | null; x: number; y: number; cx: number; cy: number; page: string };
+type Pending = {
+  anchor: Anchor | null;
+  /** Every selected element; `anchor` is the first, where the pending pin sits. */
+  anchors: Anchor[];
+  x: number;
+  y: number;
+  cx: number;
+  cy: number;
+  page: string;
+};
 
 const EMPTY_DRAFT: Draft = { text: '', images: [], videos: [] };
 /** Outline colour for the element under the cursor — nothing in the studio's palette is this pink. */
@@ -134,6 +143,7 @@ function PinLayer({
   pending,
   hoverId,
   onPlace,
+  onAddAnchor,
   onPinClick,
   onMove,
 }: {
@@ -144,12 +154,22 @@ function PinLayer({
   pending: Pending | null;
   hoverId: string | null;
   onPlace: (p: Pending) => void;
+  /** Another element clicked or boxed while a comment is being written. */
+  onAddAnchor: (a: Anchor) => void;
   onPinClick: (id: string) => void;
   /** A pin was dragged onto another element: its new anchor and fallback position. */
   onMove: (id: string, patch: Partial<ReviewComment>) => void;
 }) {
   const [pins, setPins] = useState<PinPos[]>([]);
   const [pendingPos, setPendingPos] = useState<{ x: number; y: number } | null>(null);
+  // Every selected element of the comment being written (or the one hovered in
+  // the sidebar), outlined together; the rubber band while one is being dragged.
+  const [multi, setMulti] = useState<Outline[]>([]);
+  const [band, setBand] = useState<Box | null>(null);
+  const bandRef = useRef<{ x: number; y: number; active: boolean } | null>(null);
+  useEffect(() => {
+    for (const k of Array.from(cache.current.keys())) if (k.startsWith('__pending')) cache.current.delete(k);
+  }, [pending?.anchors]);
   const cache = useRef(new Map<string, { el: Element; checkedAt: number }>());
   const hoverEl = useRef<Element | null>(null);
   const [outline, setOutline] = useState<Outline | null>(null);
@@ -235,10 +255,22 @@ function PinLayer({
         ? hoverEl.current
         : mode !== 'annotate'
           ? null
-          : pending
-            ? (cache.current.get('__pending')?.el ?? null)
-            : hoverEl.current;
+          : hoverEl.current;
       const nextOutline = target?.isConnected ? outlineOf(target) : null;
+      const group: { a: Anchor; key: string }[] = pending
+        ? pending.anchors.map((a, i) => ({ a, key: `__pending|${i}` }))
+        : (() => {
+            const c = hoverId ? comments.find((x) => x.id === hoverId) : undefined;
+            return (c?.anchors ?? []).map((a, i) => ({ a, key: `${c?.id}|multi|${i}` }));
+          })();
+      const sel: Outline[] = [];
+      for (const { a, key } of group) {
+        resolveAnchor(doc, a, cache.current, key);
+        const el = cache.current.get(key)?.el;
+        const o = el?.isConnected ? outlineOf(el) : null;
+        if (o) sel.push(o);
+      }
+      setMulti((cur) => (cur.length === sel.length && cur.every((o, i) => sameOutline(o, sel[i] ?? null)) ? cur : sel));
       if (drag && nextOutline) nextOutline.label = `Move here: ${nextOutline.label}`;
       setOutline((cur) => (sameOutline(cur, nextOutline) ? cur : nextOutline));
     };
@@ -305,23 +337,82 @@ function PinLayer({
     (el ?? doc.scrollingElement ?? doc.documentElement).scrollBy(e.deltaX, e.deltaY);
   };
 
-  const place = (e: React.MouseEvent) => {
+  // A press that moves is a rubber band over the page; one that does not is a
+  // click. Either adds to the comment being written, or starts one.
+  const bandDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    bandRef.current = { x: e.clientX, y: e.clientY, active: false };
+  };
+  const bandMove = (e: React.PointerEvent) => {
+    const b = bandRef.current;
+    if (!b) return;
+    if (!b.active) {
+      if (Math.hypot(e.clientX - b.x, e.clientY - b.y) < 6) return;
+      b.active = true;
+    }
+    setBand({
+      left: Math.min(b.x, e.clientX),
+      top: Math.min(b.y, e.clientY),
+      width: Math.abs(e.clientX - b.x),
+      height: Math.abs(e.clientY - b.y),
+    });
+  };
+  const bandUp = (e: React.PointerEvent) => {
+    const b = bandRef.current;
+    bandRef.current = null;
     const doc = iframeRef.current?.contentDocument;
-    if (!doc) return;
-    cache.current.delete('__pending');
-    onPlace({
-      anchor: anchorAt(doc, e.clientX, e.clientY),
+    if (!b || !doc) return;
+    const at = {
       x: (e.clientX / window.innerWidth) * 100,
       y: (e.clientY / window.innerHeight) * 100,
       cx: e.clientX,
       cy: e.clientY,
       page: route,
-    });
+    };
+    if (b.active) {
+      const box = {
+        left: Math.min(b.x, e.clientX),
+        top: Math.min(b.y, e.clientY),
+        width: Math.abs(e.clientX - b.x),
+        height: Math.abs(e.clientY - b.y),
+      };
+      setBand(null);
+      const found = elementsInRect(doc, box);
+      if (found.length === 0) return;
+      if (pending) {
+        // A box absorbs what it encloses: a pill selected earlier joins its
+        // card rather than sitting beside it, and a card already selected
+        // does not gain its own children.
+        const have = pending.anchors.map((a, i) => ({ a, el: cache.current.get(`__pending|${i}`)?.el }));
+        for (const h of have) {
+          const hel = h.el;
+          if (hel && found.some((el) => el !== hel && el.contains(hel))) onAddAnchor(h.a);
+        }
+        for (const el of found) {
+          if (have.some((h) => h.el && (h.el === el || h.el.contains(el)))) continue;
+          onAddAnchor(anchorFor(el));
+        }
+        return;
+      }
+      cache.current.delete('__pending');
+      const anchors = found.map(anchorFor);
+      onPlace({ anchor: anchors[0] ?? null, anchors, ...at });
+      return;
+    }
+    const a = anchorAt(doc, e.clientX, e.clientY);
+    if (pending) {
+      if (a) onAddAnchor(a);
+      return;
+    }
+    cache.current.delete('__pending');
+    onPlace({ anchor: a, anchors: a ? [a] : [], ...at });
   };
 
   return (
     <div
-      onClick={mode === 'annotate' ? place : undefined}
+      onPointerDown={mode === 'annotate' ? bandDown : undefined}
+      onPointerMove={mode === 'annotate' ? bandMove : undefined}
+      onPointerUp={mode === 'annotate' ? bandUp : undefined}
       onMouseMove={mode === 'annotate' ? track : undefined}
       onMouseLeave={() => {
         hoverEl.current = null;
@@ -335,6 +426,40 @@ function PinLayer({
         cursor: mode === 'annotate' ? 'crosshair' : undefined,
       }}
     >
+      {multi.map((o, i) => (
+        <div
+          key={`${o.left}|${o.top}|${i}`}
+          style={{
+            position: 'absolute',
+            left: o.left,
+            top: o.top,
+            width: o.width,
+            height: o.height,
+            boxSizing: 'border-box',
+            borderRadius: o.radius,
+            border: `2px solid ${HIGHLIGHT}`,
+            background: `${HIGHLIGHT}14`,
+            boxShadow: `0 0 0 2px ${HIGHLIGHT}33`,
+            pointerEvents: 'none',
+          }}
+        />
+      ))}
+      {band && (
+        <div
+          style={{
+            position: 'absolute',
+            left: band.left,
+            top: band.top,
+            width: band.width,
+            height: band.height,
+            boxSizing: 'border-box',
+            border: `1.5px dashed ${HIGHLIGHT}`,
+            background: `${HIGHLIGHT}1a`,
+            borderRadius: 4,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
       {outline && (
         <>
           <div
@@ -658,6 +783,7 @@ function CreateDialog({
   onSubmit,
   onClose,
   onCapture,
+  onRemoveAnchor,
 }: {
   pending: Pending;
   draft: Draft;
@@ -666,6 +792,8 @@ function CreateDialog({
   onClose: () => void;
   /** True while an area is picked, captured or recorded, so the shell steps aside. */
   onCapture: (busy: boolean) => void;
+  /** Drop one element from the selection. */
+  onRemoveAnchor: (i: number) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -746,6 +874,51 @@ function CreateDialog({
           <CloseIcon size={13} />
         </button>
       </div>
+      {pending.anchors.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+          <span style={{ width: '100%', fontSize: 11, color: '#8a879a', marginBottom: 2 }}>
+            {pending.anchors.length === 1 ? '1 element' : `${pending.anchors.length} elements`} · click
+            more or drag a box to add
+          </span>
+          {pending.anchors.map((a, i) => (
+            <span
+              key={`${a.selector}|${i}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                maxWidth: '100%',
+                padding: '2px 4px 2px 7px',
+                borderRadius: 7,
+                background: `${HIGHLIGHT}14`,
+                border: `1px solid ${HIGHLIGHT}55`,
+                color: '#1b1926',
+                fontSize: 11,
+              }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {a.element.tag}
+                {a.element.text ? ` · “${a.element.text.slice(0, 18)}${a.element.text.length > 18 ? '…' : ''}”` : ''}
+              </span>
+              <button
+                type="button"
+                onClick={() => onRemoveAnchor(i)}
+                aria-label="Remove this element from the comment"
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: '#8a879a',
+                  cursor: 'pointer',
+                  padding: 0,
+                  display: 'inline-flex',
+                }}
+              >
+                <CloseIcon size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <textarea
         autoFocus
         value={draft.text}
@@ -1012,8 +1185,10 @@ function Sidebar({
       ];
       // Where the pin sits, in terms an agent can find in the codebase.
       const where: string[] = [];
-      if (c.anchor) {
-        const el = c.anchor.element;
+      const anchors = c.anchors?.length ? c.anchors : c.anchor ? [c.anchor] : [];
+      for (const [i, a] of anchors.entries()) {
+        const el = a.element;
+        const nth = anchors.length > 1 ? ` ${i + 1}/${anchors.length}` : '';
         const idy = [
           `${el.tag}${el.id ? `#${el.id}` : ''}${el.classes?.length ? `.${el.classes.join('.')}` : ''}`,
           el.testId ? `[data-testid="${el.testId}"]` : '',
@@ -1023,8 +1198,9 @@ function Sidebar({
         ]
           .filter(Boolean)
           .join(' ');
-        where.push(`element: ${idy}`, `selector: ${c.anchor.selector}`);
-      } else {
+        where.push(`element${nth}: ${idy}`, `selector${nth}: ${a.selector}`);
+      }
+      if (anchors.length === 0) {
         where.push(`position: ${Math.round(c.x)}%,${Math.round(c.y)}% of the viewport (no element anchor)`);
       }
       where.push(`from: ${origin}${c.page ?? '/'}`, `comment id: ${c.id} (API: ${origin}/__review/api/comments/${c.id})`);
@@ -2054,6 +2230,23 @@ export function App() {
     if (location.pathname + location.search !== route) history.replaceState(null, '', route);
   }, [route]);
 
+  // Clicking a selected element again unselects it; a new one joins the comment.
+  const addAnchor = useCallback((a: Anchor) => {
+    setPending((p) => {
+      if (!p) return p;
+      const has = p.anchors.some((x) => x.selector === a.selector);
+      const anchors = has ? p.anchors.filter((x) => x.selector !== a.selector) : [...p.anchors, a];
+      return { ...p, anchors, anchor: anchors[0] ?? null };
+    });
+  }, []);
+  const removeAnchor = useCallback((i: number) => {
+    setPending((p) => {
+      if (!p) return p;
+      const anchors = p.anchors.filter((_, k) => k !== i);
+      return { ...p, anchors, anchor: anchors[0] ?? null };
+    });
+  }, []);
+
   const submit = useCallback(async () => {
     if (!pending) return;
     const c: ReviewComment = {
@@ -2068,6 +2261,7 @@ export function App() {
       images: draft.images.length ? draft.images : undefined,
       videos: draft.videos.length ? draft.videos : undefined,
       anchor: pending.anchor ?? undefined,
+      anchors: pending.anchors.length > 1 ? pending.anchors : undefined,
     };
     await createComment(c);
     updateDraft(EMPTY_DRAFT);
@@ -2163,6 +2357,7 @@ export function App() {
         pending={capturing ? null : pending}
         hoverId={hoverId ?? focusId}
         onPlace={setPending}
+        onAddAnchor={addAnchor}
         onPinClick={(id) => {
           const c = comments.find((x) => x.id === id);
           if (c) openComment(c);
@@ -2177,6 +2372,7 @@ export function App() {
           onSubmit={submit}
           onClose={() => setPending(null)}
           onCapture={setCapture}
+          onRemoveAnchor={removeAnchor}
         />
       )}
       {!capturing && (

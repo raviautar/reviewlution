@@ -97,6 +97,44 @@ export function matchesElement(el: Element, info: AnchorElementInfo): boolean {
   return text.slice(0, 24) === info.text.slice(0, 24);
 }
 
+/** The anchor for an element, pinned at its centre. */
+export function anchorFor(el: Element): Anchor {
+  return { selector: buildSelector(el), ox: 0.5, oy: 0.5, element: describeElement(el) };
+}
+
+export type Box = { left: number; top: number; width: number; height: number };
+
+/**
+ * The elements a dragged box selects: every element at least 70% inside it,
+ * reduced to the outermost ones (a selected card does not also select its
+ * title and its buttons), skipping page-sized containers. Capped so a box
+ * over a whole list does not become a comment on a hundred rows.
+ */
+export function anchorsInRect(doc: Document, box: Box, cap = 24): Anchor[] {
+  return elementsInRect(doc, box, cap).map(anchorFor);
+}
+
+/** The elements `anchorsInRect` would anchor, for callers that need the nodes. */
+export function elementsInRect(doc: Document, box: Box, cap = 24): Element[] {
+  const win = doc.defaultView;
+  if (!win) return [];
+  const right = box.left + box.width;
+  const bottom = box.top + box.height;
+  const inside: Element[] = [];
+  for (const el of Array.from(doc.body.querySelectorAll('*'))) {
+    if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) continue;
+    if (r.width > win.innerWidth * 0.9 && r.height > win.innerHeight * 0.9) continue;
+    const ix = Math.max(0, Math.min(r.right, right) - Math.max(r.left, box.left));
+    const iy = Math.max(0, Math.min(r.bottom, bottom) - Math.max(r.top, box.top));
+    if ((ix * iy) / (r.width * r.height) < 0.7) continue;
+    inside.push(el);
+  }
+  const outer = inside.filter((el) => !inside.some((other) => other !== el && other.contains(el)));
+  return outer.slice(0, cap);
+}
+
 /** Build the anchor for a click at viewport coordinates inside the iframe doc. */
 export function anchorAt(doc: Document, x: number, y: number): Anchor | null {
   const el = doc.elementFromPoint(x, y);
