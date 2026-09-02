@@ -11,7 +11,7 @@
  * simply has no dot — its comment stays in the sidebar, which always lists
  * every page's comments.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useLayoutEffect } from 'react';
 import {
   ACCENT,
   AUTHOR_KEY,
@@ -437,9 +437,8 @@ function PinLayer({
             height: o.height,
             boxSizing: 'border-box',
             borderRadius: o.radius,
-            border: `2px solid ${HIGHLIGHT}`,
-            background: `${HIGHLIGHT}14`,
-            boxShadow: `0 0 0 2px ${HIGHLIGHT}33`,
+            border: `1.5px solid ${HIGHLIGHT}a6`,
+            background: `${HIGHLIGHT}0a`,
             pointerEvents: 'none',
           }}
         />
@@ -453,8 +452,8 @@ function PinLayer({
             width: band.width,
             height: band.height,
             boxSizing: 'border-box',
-            border: `1.5px dashed ${HIGHLIGHT}`,
-            background: `${HIGHLIGHT}1a`,
+            border: `1px dashed ${HIGHLIGHT}b3`,
+            background: `${HIGHLIGHT}12`,
             borderRadius: 4,
             pointerEvents: 'none',
           }}
@@ -471,8 +470,8 @@ function PinLayer({
               height: outline.height,
               boxSizing: 'border-box',
               borderRadius: outline.radius,
-              border: `2px solid ${HIGHLIGHT}`,
-              boxShadow: `0 0 0 3px ${HIGHLIGHT}33, 0 0 18px 4px ${HIGHLIGHT}99, inset 0 0 10px ${HIGHLIGHT}33`,
+              border: `1.5px solid ${HIGHLIGHT}`,
+              boxShadow: `0 0 0 2px ${HIGHLIGHT}22`,
               pointerEvents: 'none',
               transition: 'left .05s linear, top .05s linear, width .05s linear, height .05s linear',
             }}
@@ -835,10 +834,22 @@ function CreateDialog({
   };
 
   const left = Math.min(Math.max(pending.cx, 12), window.innerWidth - 332);
-  const top = Math.min(Math.max(pending.cy + 14, 12), window.innerHeight - 320);
+  const wanted = Math.min(Math.max(pending.cy + 14, 12), window.innerHeight - 320);
+  // The box grows with its selection and attachments, so it is measured after
+  // layout and pushed up until its bottom edge is back on screen.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [lift, setLift] = useState(0);
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const over = el.getBoundingClientRect().height + wanted - (window.innerHeight - 12);
+    setLift(over > 0 ? Math.min(over, wanted - 12) : 0);
+  }, [wanted, pending.anchors.length, draft.images.length, draft.videos.length, error]);
+  const top = wanted - lift;
 
   return (
     <div
+      ref={boxRef}
       style={{
         position: 'fixed',
         left,
@@ -875,7 +886,17 @@ function CreateDialog({
         </button>
       </div>
       {pending.anchors.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 4,
+            marginBottom: 8,
+            maxHeight: 118,
+            overflowY: 'auto',
+            paddingRight: 2,
+          }}
+        >
           <span style={{ width: '100%', fontSize: 11, color: '#8a879a', marginBottom: 2 }}>
             {pending.anchors.length === 1 ? '1 element' : `${pending.anchors.length} elements`} · click
             more or drag a box to add
