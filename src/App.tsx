@@ -1000,13 +1000,15 @@ function Sidebar({
 
   const [copiedTick, setCopiedTick] = useState(false);
   const copyShown = () => {
+    const origin = location.origin;
+    const abs = (u: string) => (u.startsWith('http') ? u : `${origin}${u}`);
     const lines = shown.map(({ c, n }) => {
       const status = c.resolved ? 'resolved' : 'open';
       const head = `### #${n} · ${c.page ?? '/'} · ${status}${c.author ? ` · ${c.author}` : ''}`;
       const replies = (c.replies ?? []).map((r) => `> ${r.author ?? 'reply'}: ${r.text}`);
       const media = [
-        ...(c.images ?? []).map((u) => `image: ${u}`),
-        ...(c.videos ?? []).map((u) => `video: ${u}`),
+        ...(c.images ?? []).map((u) => `image: ${abs(u)}`),
+        ...(c.videos ?? []).map((u) => `video: ${abs(u)}`),
       ];
       // Where the pin sits, in terms an agent can find in the codebase.
       const where: string[] = [];
@@ -1025,6 +1027,7 @@ function Sidebar({
       } else {
         where.push(`position: ${Math.round(c.x)}%,${Math.round(c.y)}% of the viewport (no element anchor)`);
       }
+      where.push(`from: ${origin}${c.page ?? '/'}`, `comment id: ${c.id} (API: ${origin}/__review/api/comments/${c.id})`);
       return [head, c.text, ...where, ...media, ...replies].join('\n');
     });
     const doc = `## ${tab === 'resolved' ? 'Resolved' : 'Open'} comments (${shown.length})\n\n${lines.join('\n\n')}\n`;
