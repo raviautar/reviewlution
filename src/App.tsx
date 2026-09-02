@@ -20,6 +20,7 @@ import {
   addReply,
   deleteReply,
   bodyOf,
+  captureViewport,
   createComment,
   deleteComment,
   listComments,
@@ -1224,6 +1225,7 @@ function Sidebar({
       if (anchors.length === 0) {
         where.push(`position: ${Math.round(c.x)}%,${Math.round(c.y)}% of the viewport (no element anchor)`);
       }
+      if (c.viewport) where.push(`viewport: ${c.viewport.device} · ${c.viewport.w}×${c.viewport.h} @${c.viewport.dpr}x`);
       where.push(`from: ${origin}${c.page ?? '/'}`, `comment id: ${c.id} (API: ${origin}/__review/api/comments/${c.id})`);
       return [head, c.text, ...where, ...media, ...replies].join('\n');
     });
@@ -1545,6 +1547,24 @@ function Sidebar({
                 </svg>
               </span>
             </div>
+            {!collapsed.has(c.id) && c.viewport && (
+              <span
+                title={c.viewport.ua}
+                style={{
+                  display: 'inline-block',
+                  background: '#f3f2f8',
+                  color: '#6b6880',
+                  borderRadius: 7,
+                  padding: '2px 8px',
+                  fontSize: 10.5,
+                  fontFamily: 'ui-monospace, monospace',
+                  marginBottom: 6,
+                  marginRight: 6,
+                }}
+              >
+                {c.viewport.device} · {c.viewport.w}×{c.viewport.h}
+              </span>
+            )}
             {!collapsed.has(c.id) && c.page && c.page !== route && (
               <button
                 type="button"
@@ -2346,6 +2366,7 @@ export function App() {
       videos: draft.videos.length ? draft.videos : undefined,
       anchor: pending.anchor ?? undefined,
       anchors: pending.anchors.length > 1 ? pending.anchors : undefined,
+      viewport: captureViewport(iframeRef.current?.contentWindow ?? window),
     };
     await createComment(c);
     updateDraft(EMPTY_DRAFT);

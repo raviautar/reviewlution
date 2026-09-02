@@ -54,6 +54,37 @@ export interface ReviewComment {
   /** Every element the comment is about, when there is more than one; `anchor` is the first. */
   anchors?: Anchor[];
   replies?: Reply[];
+  /** Where the reviewer was looking from: emulated device and viewport size. */
+  viewport?: Viewport;
+}
+
+export interface Viewport {
+  w: number;
+  h: number;
+  dpr: number;
+  ua: string;
+  device: string;
+}
+
+/** "Samsung SM-G981B", "iPhone", "Mac": read from the UA the dev panel emulates. */
+export function deviceLabel(ua: string): string {
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/iPad/.test(ua)) return 'iPad';
+  const android = /Android[^)]*;\s*([^);]+)\)/.exec(ua);
+  if (android) {
+    const model = android[1].trim().replace(/\s+Build\/.*$/, '');
+    return /^SM-/i.test(model) ? `Samsung ${model}` : model;
+  }
+  if (/Android/.test(ua)) return 'Android';
+  if (/Macintosh/.test(ua)) return 'Mac';
+  if (/Windows/.test(ua)) return 'Windows';
+  return 'Desktop';
+}
+
+/** The device and size a comment was made at, measured on the app's own window. */
+export function captureViewport(win: Window): Viewport {
+  const ua = navigator.userAgent;
+  return { w: win.innerWidth, h: win.innerHeight, dpr: win.devicePixelRatio, ua, device: deviceLabel(ua) };
 }
 
 export async function addReply(commentId: string, text: string, author: string): Promise<void> {
