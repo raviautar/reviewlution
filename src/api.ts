@@ -66,16 +66,31 @@ export interface Viewport {
   device: string;
 }
 
+// Chrome on Android freezes the UA's model to the literal "K"; the real one
+// only comes from client hints, fetched once and remembered for later labels.
+let hintedModel = '';
+try {
+  (navigator as { userAgentData?: { getHighEntropyValues?: (k: string[]) => Promise<{ model?: string }> } }).userAgentData
+    ?.getHighEntropyValues?.(['model'])
+    .then((d) => {
+      hintedModel = d.model ?? '';
+    })
+    .catch(() => {});
+} catch {
+  /* no client hints */
+}
+
 /** "Samsung SM-G981B", "iPhone", "Mac": read from the UA the dev panel emulates. */
 export function deviceLabel(ua: string): string {
   if (/iPhone/.test(ua)) return 'iPhone';
   if (/iPad/.test(ua)) return 'iPad';
-  const android = /Android[^)]*;\s*([^);]+)\)/.exec(ua);
-  if (android) {
-    const model = android[1].trim().replace(/\s+Build\/.*$/, '');
+  if (/Android/.test(ua)) {
+    const android = /Android[^)]*;\s*([^);]+)\)/.exec(ua);
+    let model = (android?.[1] ?? '').trim().replace(/\s+Build\/.*$/, '');
+    if (!model || model === 'K') model = hintedModel;
+    if (!model) return 'Android';
     return /^SM-/i.test(model) ? `Samsung ${model}` : model;
   }
-  if (/Android/.test(ua)) return 'Android';
   if (/Macintosh/.test(ua)) return 'Mac';
   if (/Windows/.test(ua)) return 'Windows';
   return 'Desktop';
