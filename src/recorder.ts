@@ -15,6 +15,31 @@ export interface Rect {
 
 export const HIGHLIGHT = '#ff1fb3';
 
+export function displayCaptureSupported(): boolean {
+  return typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+}
+
+/**
+ * Phones have no getDisplayMedia, so the whole visible page is rasterized from
+ * the app's iframe document instead. The shell and its pins live in the parent
+ * document, which keeps the toolbar out of the shot by construction.
+ */
+export async function capturePage(): Promise<Blob> {
+  const win = document.querySelector('iframe')?.contentWindow;
+  const doc = win?.document;
+  if (!win || !doc) throw new Error('no app frame to capture');
+  const { domToBlob } = await import('modern-screenshot');
+  const blob = await domToBlob(doc.documentElement, {
+    width: win.innerWidth,
+    height: win.innerHeight,
+    scale: Math.min(2, win.devicePixelRatio || 1),
+    backgroundColor: getComputedStyle(doc.body).backgroundColor,
+    style: { transform: `translate(${-win.scrollX}px, ${-win.scrollY}px)`, transformOrigin: 'top left' },
+  });
+  if (!blob || blob.size === 0) throw new Error('capture produced nothing');
+  return blob;
+}
+
 function norm(a: { x: number; y: number }, e: MouseEvent): Rect {
   return {
     x: Math.min(a.x, e.clientX),

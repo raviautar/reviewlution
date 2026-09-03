@@ -5,7 +5,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { uploadImage } from './api.js';
 import { CameraIcon } from './icons.js';
-import { captureRegion, selectRegion } from './recorder.js';
+import { capturePage, captureRegion, displayCaptureSupported, selectRegion } from './recorder.js';
 
 type Phase = 'idle' | 'selecting' | 'capturing';
 
@@ -31,8 +31,24 @@ export function SnapButton({
     busyRef.current?.(phase !== 'idle');
   }, [phase]);
 
+  const native = displayCaptureSupported();
+
   const begin = async () => {
     setError(null);
+    if (!native) {
+      // One tap on a phone: the page as it stands, straight into the comment.
+      setPhase('capturing');
+      try {
+        const blob = await capturePage();
+        const file = new File([blob], 'capture.png', { type: 'image/png' });
+        onDone(await uploadImage(file));
+      } catch {
+        setError('Could not capture the page.');
+      } finally {
+        setPhase('idle');
+      }
+      return;
+    }
     setPhase('selecting');
     const rect = await selectRegion();
     if (!rect) {
@@ -63,7 +79,11 @@ export function SnapButton({
         style={{ ...style, opacity: phase === 'idle' ? undefined : 0.5 }}
         disabled={phase !== 'idle'}
         onClick={() => void begin()}
-        title="Capture area: drag out part of the page, it is attached as an image"
+        title={
+          native
+            ? 'Capture area: drag out part of the page, it is attached as an image'
+            : 'Capture the screen: the page as you see it is attached as an image'
+        }
         aria-label="Capture area"
       >
         <CameraIcon size={iconSize} />
