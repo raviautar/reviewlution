@@ -98,7 +98,21 @@ function isTypingTarget(t: EventTarget | null): boolean {
 
 /* ---------------------------------------------------------------- pin layer */
 
-type PinPos = { id: string; n: number; x: number; y: number; resolved: boolean };
+type PinPos = { id: string; n: number; x: number; y: number; resolved: boolean; ghost: boolean };
+/** Where a comment stands right now: its element is on this screen, gone from it
+ * (the pin falls back to the original click spot), or on another page. */
+type PinStatus = 'here' | 'missing' | 'elsewhere';
+
+const anchorsOf = (c: ReviewComment): Anchor[] =>
+  c.anchors?.length ? c.anchors : c.anchor ? [c.anchor] : [];
+
+/** A short human name for an anchored element: its tag plus the text or label it carried. */
+function anchorLabel(a: Anchor): string {
+  const e = a.element;
+  const name = (e.text || e.ariaLabel || e.testId || e.id || '').trim();
+  const snip = name.length > 42 ? `${name.slice(0, 42)}…` : name;
+  return snip ? `${e.tag} · “${snip}”` : e.tag;
+}
 type Outline = {
   left: number;
   top: number;
@@ -147,6 +161,7 @@ function PinLayer({
   onAddAnchor,
   onPinClick,
   onMove,
+  onStatuses,
 }: {
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
   comments: ReviewComment[];
@@ -160,6 +175,8 @@ function PinLayer({
   onPinClick: (id: string) => void;
   /** A pin was dragged onto another element: its new anchor and fallback position. */
   onMove: (id: string, patch: Partial<ReviewComment>) => void;
+  /** Per-comment placement status, sent whenever resolution changes. */
+  onStatuses: (m: Map<string, PinStatus>) => void;
 }) {
   const [pins, setPins] = useState<PinPos[]>([]);
   const [pendingPos, setPendingPos] = useState<{ x: number; y: number } | null>(null);
@@ -172,6 +189,9 @@ function PinLayer({
     for (const k of Array.from(cache.current.keys())) if (k.startsWith('__pending')) cache.current.delete(k);
   }, [pending?.anchors]);
   const cache = useRef(new Map<string, { el: Element; checkedAt: number }>());
+  const statusesRef = useRef('');
+  const onStatusesRef = useRef(onStatuses);
+  onStatusesRef.current = onStatuses;
   const hoverEl = useRef<Element | null>(null);
   const [outline, setOutline] = useState<Outline | null>(null);
   // Dragging a pin: pointer capture keeps the events on the pin even over the
@@ -203,20 +223,36 @@ function PinLayer({
       const doc = iframeRef.current?.contentDocument;
       if (!doc) return;
       const next: PinPos[] = [];
+      const statuses = new Map<string, PinStatus>();
       comments.forEach((c, i) => {
+        const anchors = anchorsOf(c);
+        let pos: { x: number; y: number } | null = null;
+        for (const a of anchors) {
+          // Keyed by selector too, so a pin moved to another element re-resolves.
+          pos = resolveAnchor(doc, a, cache.current, `${c.id}|${a.selector}`);
+          if (pos) break;
+        }
+        const onOwnPage = c.page === route;
+        statuses.set(c.id, pos ? 'here' : onOwnPage ? (anchors.length ? 'missing' : 'here') : 'elsewhere');
         // Resolved comments live in the sidebar's Resolved tab, not on the page.
         if (c.resolved) return;
-        let pos: { x: number; y: number } | null = null;
-        if (c.anchor) {
-          // Keyed by selector too, so a pin moved to another element re-resolves.
-          pos = resolveAnchor(doc, c.anchor, cache.current, `${c.id}|${c.anchor.selector}`);
-        } else if (c.page === route) {
+        // No element to glue to — gone from this build, or a pre-anchor comment.
+        // On the comment's own page the pin falls back to the original click
+        // spot, drawn as a ghost when an anchor should have matched.
+        let ghost = false;
+        if (!pos && onOwnPage) {
           pos = { x: (c.x / 100) * window.innerWidth, y: (c.y / 100) * window.innerHeight };
+          ghost = anchors.length > 0;
         }
         if (!pos) return;
         if (pos.y < -20 || pos.y > window.innerHeight + 20) return;
-        next.push({ id: c.id, n: i + 1, x: pos.x, y: pos.y, resolved: !!c.resolved });
+        next.push({ id: c.id, n: i + 1, x: pos.x, y: pos.y, resolved: !!c.resolved, ghost });
       });
+      const ser = Array.from(statuses, ([k, v]) => `${k}:${v}`).join('|');
+      if (ser !== statusesRef.current) {
+        statusesRef.current = ser;
+        onStatusesRef.current(new Map(statuses));
+      }
       setPins((cur) => {
         if (
           cur.length === next.length &&
@@ -227,7 +263,8 @@ function PinLayer({
               p.id === q.id &&
               Math.abs(p.x - q.x) < 0.5 &&
               Math.abs(p.y - q.y) < 0.5 &&
-              p.resolved === q.resolved
+              p.resolved === q.resolved &&
+              p.ghost === q.ghost
             );
           })
         ) {
@@ -507,7 +544,11 @@ function PinLayer({
           <button
             key={p.id}
             type="button"
-            title="Open this comment · drag it onto another element to move it"
+            title={
+              p.ghost
+                ? "The element this comment points at isn't on this screen — the pin marks its original spot. Drag it onto the right element to re-attach it."
+                : 'Open this comment · drag it onto another element to move it'
+            }
             onPointerDown={(e) => pinPointerDown(e, p.id)}
             onPointerMove={(e) => pinPointerMove(e, p.id)}
             onPointerUp={(e) => pinPointerUp(e, p.id)}
@@ -531,8 +572,8 @@ function PinLayer({
               width: 22,
               height: 22,
               borderRadius: '50% 50% 50% 4px',
-              border: `2px solid ${dragging ? HIGHLIGHT : '#fff'}`,
-              background: ACCENT,
+              border: `2px ${p.ghost ? 'dashed' : 'solid'} ${dragging ? HIGHLIGHT : '#fff'}`,
+              background: p.ghost ? '#8a879a' : ACCENT,
               color: '#fff',
               fontSize: 10,
               fontWeight: 700,
@@ -543,7 +584,7 @@ function PinLayer({
               pointerEvents: 'auto',
               touchAction: 'none',
               padding: 0,
-              opacity: p.resolved ? 0.45 : 1,
+              opacity: p.resolved ? 0.45 : p.ghost ? 0.85 : 1,
               transform: dragging ? 'scale(1.2)' : undefined,
               zIndex: dragging ? 1 : undefined,
               boxShadow: dragging
@@ -1136,10 +1177,13 @@ function Sidebar({
   onClose,
   hidden,
   onCapture,
+  statuses,
 }: {
   /** Kept mounted but invisible while a capture runs from one of its cards. */
   hidden: boolean;
   onCapture: (busy: boolean) => void;
+  /** Placement status per comment id, from the pin layer. */
+  statuses: Map<string, PinStatus>;
   me: string;
   route: string;
   comments: ReviewComment[];
@@ -1565,29 +1609,13 @@ function Sidebar({
                 {c.viewport.device} · {c.viewport.w}×{c.viewport.h}
               </span>
             )}
-            {!collapsed.has(c.id) && c.page && c.page !== route && (
-              <button
-                type="button"
-                onClick={() => onOpenComment(c)}
-                title="Go to this page"
-                style={{
-                  border: 'none',
-                  background: '#f3f2f8',
-                  color: '#6b6880',
-                  borderRadius: 7,
-                  padding: '2px 8px',
-                  fontSize: 10.5,
-                  fontFamily: 'ui-monospace, monospace',
-                  cursor: 'pointer',
-                  marginBottom: 6,
-                  maxWidth: '100%',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {c.page} ↗
-              </button>
+            {!collapsed.has(c.id) && (
+              <PlaceLine
+                c={c}
+                route={route}
+                status={statuses.get(c.id)}
+                onOpen={() => onOpenComment(c)}
+              />
             )}
             {!collapsed.has(c.id) && (
               <>
@@ -1612,6 +1640,84 @@ function Sidebar({
         ))}
       </div>
     </aside>
+  );
+}
+
+const placeChip = {
+  border: 'none',
+  borderRadius: 7,
+  padding: '2px 8px',
+  fontSize: 10.5,
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+} as const;
+
+/** Where the comment lives: page chip, placement status, and the element it points at. */
+function PlaceLine({
+  c,
+  route,
+  status,
+  onOpen,
+}: {
+  c: ReviewComment;
+  route: string;
+  status: PinStatus | undefined;
+  onOpen: () => void;
+}) {
+  const anchors = anchorsOf(c);
+  const otherPage = !!c.page && c.page !== route;
+  if (!otherPage && status !== 'missing' && status !== 'here' && anchors.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+      {otherPage && (
+        <button
+          type="button"
+          onClick={onOpen}
+          title="Go to this page"
+          style={{
+            ...placeChip,
+            background: '#f3f2f8',
+            color: '#6b6880',
+            fontFamily: 'ui-monospace, monospace',
+            cursor: 'pointer',
+          }}
+        >
+          {c.page} ↗
+        </button>
+      )}
+      {status === 'missing' && (
+        <span
+          title="The pinned element isn't on this screen any more — the grey dashed pin marks the comment's original spot"
+          style={{ ...placeChip, background: '#fdf3e2', color: '#9a6b15', fontWeight: 600 }}
+        >
+          element missing on this build
+        </span>
+      )}
+      {status === 'here' && (
+        <span style={{ ...placeChip, background: '#e4f5ec', color: '#1c8a5c', fontWeight: 600 }}>
+          on this screen
+        </span>
+      )}
+      {anchors.length > 0 && (
+        <span
+          title={anchors.map(anchorLabel).join('\n')}
+          style={{
+            fontSize: 10.5,
+            color: '#8a879a',
+            fontFamily: 'ui-monospace, monospace',
+            maxWidth: '100%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {anchorLabel(anchors[0])}
+          {anchors.length > 1 ? ` +${anchors.length - 1}` : ''}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -2204,6 +2310,7 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const [statuses, setStatuses] = useState<Map<string, PinStatus>>(new Map());
   const [askName, setAskName] = useState(false);
   // A capture or recording in progress: pins and chrome step aside so the page
   // is live (and out of the clip) until it ends.
@@ -2468,6 +2575,7 @@ export function App() {
           if (c) openComment(c);
         }}
         onMove={move}
+        onStatuses={setStatuses}
       />
       {pending && (
         <CreateDialog
@@ -2500,6 +2608,7 @@ export function App() {
           comments={comments}
           focusId={focusId}
           onHover={setHoverId}
+          statuses={statuses}
           onOpenComment={openComment}
           onEdit={(c, patch) => void edit(c, patch)}
           onResolve={(c) => void resolve(c)}

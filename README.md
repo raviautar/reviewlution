@@ -14,7 +14,7 @@ A top-level page load of any app path gets the shell; the shell iframes the same
 
 - Annotate mode (pencil, or ⌥C): hover outlines the element under the cursor in pink with its name; click drops a numbered pin that stays glued to that element through scrolling, layout changes and re-renders.
 - Comments with pasted or attached images, area captures (Capture area: drag out part of the page, it is attached as a PNG) and screen recordings (Record screen: drag out the area; while it records the page is live and the toolbar steps aside, a bar at the top shows the clock and "Stop & attach to comment", and the clip lands in the comment you were writing); single-level replies; edit, resolve, reopen, delete; the list refreshes itself every few seconds.
-- Pins can be dragged onto another element; a pin only shows when its element is actually on the page (identity is checked, not just position).
+- Pins can be dragged onto another element; a pin shows on its element when that element is on the page (identity is checked, not just position). When the element is gone from the comment's page — a redesigned build, a different tab state — a grey dashed ghost pin marks the original spot instead, the card says "element missing on this build", and every anchored card names the element it points at (e.g. `button · “Test Connection”`).
 - The comment list (⌥L) covers every page; a card's route chip navigates the iframe there; cards collapse to one line.
 
 ## Run it
