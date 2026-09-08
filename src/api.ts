@@ -37,6 +37,8 @@ export interface Reply {
 
 export interface ReviewComment {
   id: string;
+  /** Set only on comments in the deleted store. */
+  deletedAt?: number;
   text: string;
   /** Legacy fallback position, percent of the viewport. */
   x: number;
@@ -123,6 +125,18 @@ export async function listComments(): Promise<ReviewComment[]> {
   const res = await fetch(API);
   if (!res.ok) throw new Error(`Loading comments failed (${res.status})`);
   return (await res.json()) as ReviewComment[];
+}
+
+/** Deleted comments, newest first — recoverable from the Deleted tab. */
+export async function listDeleted(): Promise<ReviewComment[]> {
+  const res = await fetch('/__review/api/deleted');
+  if (!res.ok) throw new Error(`Loading deleted comments failed (${res.status})`);
+  return (await res.json()) as ReviewComment[];
+}
+
+export async function restoreComment(id: string): Promise<void> {
+  const res = await fetch(`${API}/${encodeURIComponent(id)}/restore`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Restoring the comment failed (${res.status})`);
 }
 
 export async function createComment(c: ReviewComment): Promise<void> {

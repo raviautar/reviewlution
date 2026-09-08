@@ -19,6 +19,10 @@ import Fastify from 'fastify';
 const PORT = Number(process.env.PORT ?? 8090);
 const UPSTREAM = process.env.UPSTREAM ?? 'http://localhost:8099';
 const DATA_FILE = process.env.DATA_FILE ?? './comments.json';
+// Deleted comments are kept, not dropped, so an accidental delete can be seen
+// and restored; capped so the store cannot grow without bound.
+const DELETED_FILE = DATA_FILE.replace(/\.json$/, '') + '.deleted.json';
+const DELETED_CAP = 500;
 // Where a visit to `/` (or to /__review itself) lands, and the browser tab title.
 const DEFAULT_ROUTE = process.env.DEFAULT_ROUTE ?? '/';
 const APP_TITLE = process.env.APP_TITLE ?? 'Preview · Review';
@@ -34,6 +38,14 @@ try {
   comments = [];
 }
 
+let deleted = [];
+try {
+  deleted = JSON.parse(await readFile(DELETED_FILE, 'utf8'));
+  if (!Array.isArray(deleted)) deleted = [];
+} catch {
+  deleted = [];
+}
+
 let writing = Promise.resolve();
 function persist(op, payload) {
   writing = writing.then(async () => {
@@ -41,6 +53,9 @@ function persist(op, payload) {
     const tmp = `${DATA_FILE}.tmp`;
     await writeFile(tmp, JSON.stringify(comments, null, 2));
     await rename(tmp, DATA_FILE);
+    const dtmp = `${DELETED_FILE}.tmp`;
+    await writeFile(dtmp, JSON.stringify(deleted, null, 2));
+    await rename(dtmp, DELETED_FILE);
     // Append-only journal: every mutation survives here even if the state
     // file is ever clobbered, and any loss can be traced to its request.
     const line = JSON.stringify({ at: new Date().toISOString(), op, payload });
@@ -240,9 +255,36 @@ app.delete('/__review/api/comments/:id', async (req, reply) => {
     reply.code(404);
     return { error: 'not found' };
   }
+  // Keep it in the deleted store (newest first) so it can be seen and restored.
+  deleted = [{ ...removed, deletedAt: Date.now() }, ...deleted.filter((c) => c.id !== removed.id)].slice(
+    0,
+    DELETED_CAP,
+  );
   await persist('delete', removed);
   reply.code(204);
   return null;
+});
+
+// The deleted store, newest first — the "Deleted" tab and any audit read this.
+app.get('/__review/api/deleted', async () => deleted);
+
+// Put a deleted comment back exactly as it was (its pin, thread and media too).
+app.post('/__review/api/comments/:id/restore', async (req, reply) => {
+  const i = deleted.findIndex((c) => c.id === req.params.id);
+  if (i < 0) {
+    reply.code(404);
+    return { error: 'not found' };
+  }
+  if (comments.some((c) => c.id === req.params.id)) {
+    reply.code(409);
+    return { error: 'already present' };
+  }
+  const { deletedAt, ...c } = deleted[i];
+  deleted = deleted.filter((x) => x.id !== req.params.id);
+  comments.push(c);
+  await persist('restore', c);
+  reply.code(201);
+  return c;
 });
 
 app.register(fastifyStatic, {

@@ -1,0 +1,79 @@
+# A review shell in front of the shared, ArgoCD-managed dev studio. It proxies
+# wand-studio-service and adds its own host (studio-review.dev.wand.ai) — the
+# real studio.dev.wand.ai and its ArgoCD app are never touched. Objects are
+# name-suffixed and carry their own selector label so they never mix with the
+# pr-60 review shell that also lives in this namespace.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: wand-studio
+nameSuffix: -studio-dev
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/raviautar/review-toolbar
+    newName: wandserviceplatform.azurecr.io/images/review-toolbar
+    newTag: "31becc4"
+patches:
+  - target:
+      kind: PersistentVolumeClaim
+      name: review-toolbar-data
+    patch: |
+      - op: add
+        path: /spec/storageClassName
+        value: managed-csi
+  - target:
+      kind: Deployment
+      name: review-toolbar
+    patch: |
+      - op: add
+        path: /spec/selector/matchLabels/wand.ai~1shell
+        value: studio-dev
+      - op: add
+        path: /spec/template/metadata/labels/wand.ai~1shell
+        value: studio-dev
+      - op: replace
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: UPSTREAM
+            value: http://wand-studio-service:8080
+          - name: DATA_FILE
+            value: /data/comments.json
+          - name: DEFAULT_ROUTE
+            value: /integrations
+          - name: APP_TITLE
+            value: Studio (dev) · Review
+  - target:
+      kind: Service
+      name: review-toolbar
+    patch: |
+      - op: add
+        path: /spec/selector/wand.ai~1shell
+        value: studio-dev
+  - target:
+      kind: Ingress
+      name: review-toolbar
+    patch: |
+      - op: add
+        path: /spec/ingressClassName
+        value: internal
+      - op: add
+        path: /metadata/annotations/kubernetes.io~1ingress.class
+        value: internal
+      - op: add
+        path: /metadata/annotations/external-dns.alpha.kubernetes.io~1hostname
+        value: studio-review.dev.wand.ai
+      - op: add
+        path: /metadata/annotations/external-dns.alpha.kubernetes.io~1cloudflare-proxied
+        value: "false"
+      - op: add
+        path: /metadata/annotations/external-dns.alpha.kubernetes.io~1ttl
+        value: "120"
+      - op: replace
+        path: /spec/rules/0/host
+        value: studio-review.dev.wand.ai
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: studio-review.dev.wand.ai
+      - op: replace
+        path: /spec/tls/0/secretName
+        value: studio-review.dev.wand.ai-tls

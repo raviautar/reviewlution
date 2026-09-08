@@ -24,6 +24,8 @@ import {
   createComment,
   deleteComment,
   listComments,
+  listDeleted,
+  restoreComment,
   patchComment,
   storedName,
   timeAgo,
@@ -1178,12 +1180,17 @@ function Sidebar({
   hidden,
   onCapture,
   statuses,
+  deleted,
+  onRestore,
 }: {
   /** Kept mounted but invisible while a capture runs from one of its cards. */
   hidden: boolean;
   onCapture: (busy: boolean) => void;
   /** Placement status per comment id, from the pin layer. */
   statuses: Map<string, PinStatus>;
+  /** Deleted comments, newest first — the Deleted tab restores from here. */
+  deleted: ReviewComment[];
+  onRestore: (c: ReviewComment) => void;
   me: string;
   route: string;
   comments: ReviewComment[];
@@ -1199,7 +1206,7 @@ function Sidebar({
   onClose: () => void;
 }) {
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
-  const [tab, setTab] = useState<'open' | 'resolved'>('open');
+  const [tab, setTab] = useState<'open' | 'resolved' | 'deleted'>('open');
   const [confirmClear, setConfirmClear] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(storedCollapsed);
   // One reply box open at a time; it starts as a button on the card.
@@ -1280,7 +1287,7 @@ function Sidebar({
     });
   };
 
-  const tabBtn = (key: 'open' | 'resolved', label: string) => (
+  const tabBtn = (key: 'open' | 'resolved' | 'deleted', label: string) => (
     <button
       type="button"
       onClick={() => setTab(key)}
@@ -1440,6 +1447,7 @@ function Sidebar({
       >
         {tabBtn('open', `Open (${openCount})`)}
         {tabBtn('resolved', `Resolved (${numbered.length - openCount})`)}
+        {tabBtn('deleted', `Deleted (${deleted.length})`)}
         {tab === 'resolved' && numbered.length - openCount > 0 && (
           <button
             type="button"
@@ -1473,14 +1481,16 @@ function Sidebar({
         )}
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px 90px' }}>
-        {shown.length === 0 && (
+        {tab === 'deleted' && <DeletedList deleted={deleted} onRestore={onRestore} />}
+        {tab !== 'deleted' && shown.length === 0 && (
           <p style={{ padding: '26px 10px', fontSize: 12.5, color: '#8a879a', textAlign: 'center' }}>
             {tab === 'open'
               ? 'No open comments. Use the pencil, then click any element.'
               : 'Nothing resolved yet.'}
           </p>
         )}
-        {shown.map(({ c, n: i }) => (
+        {tab !== 'deleted' &&
+          shown.map(({ c, n: i }) => (
           <div
             key={c.id}
             ref={(el) => {
@@ -1637,9 +1647,105 @@ function Sidebar({
               </>
             )}
           </div>
-        ))}
+          ))}
       </div>
     </aside>
+  );
+}
+
+/** The Deleted tab: what was removed, newest first, each restorable in one click. */
+function DeletedList({
+  deleted,
+  onRestore,
+}: {
+  deleted: ReviewComment[];
+  onRestore: (c: ReviewComment) => void;
+}) {
+  if (deleted.length === 0) {
+    return (
+      <p style={{ padding: '26px 10px', fontSize: 12.5, color: '#8a879a', textAlign: 'center' }}>
+        Nothing deleted. A deleted comment lands here and can be restored.
+      </p>
+    );
+  }
+  return (
+    <>
+      {deleted.map((c) => (
+        <div
+          key={c.id}
+          style={{
+            border: '1px solid #eeedf3',
+            borderRadius: 12,
+            padding: '10px 12px',
+            marginBottom: 8,
+            background: '#faf9fc',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+            <b style={{ fontSize: 12.5, color: '#1b1926' }}>{c.author ?? 'Anonymous'}</b>
+            {c.deletedAt && (
+              <span style={{ fontSize: 11, color: '#8a879a' }}>deleted {timeAgo(c.deletedAt)}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => onRestore(c)}
+              title="Put this comment back with its pin, thread and images"
+              style={{
+                marginLeft: 'auto',
+                border: '1px solid #d8d5e6',
+                background: '#fff',
+                color: ACCENT,
+                borderRadius: 8,
+                height: 26,
+                padding: '0 12px',
+                fontSize: 11.5,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Restore
+            </button>
+          </div>
+          {c.page && (
+            <span
+              style={{
+                display: 'inline-block',
+                background: '#f3f2f8',
+                color: '#6b6880',
+                borderRadius: 7,
+                padding: '2px 8px',
+                fontSize: 10.5,
+                fontFamily: 'ui-monospace, monospace',
+                marginBottom: 6,
+              }}
+            >
+              {c.page}
+            </span>
+          )}
+          <p style={{ margin: 0, fontSize: 12.5, color: '#3b3950', whiteSpace: 'pre-wrap' }}>
+            {bodyOf(c)}
+          </p>
+          {c.images && c.images.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+              {c.images.map((url) => (
+                <img
+                  key={url}
+                  src={url}
+                  alt=""
+                  style={{
+                    width: 64,
+                    height: 48,
+                    objectFit: 'cover',
+                    borderRadius: 8,
+                    border: '1px solid #e3e1ec',
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -1743,6 +1849,18 @@ function CardBody({
   const [videos, setVideos] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
 
+  const addImageFiles = async (files: Iterable<File>) => {
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) continue;
+      try {
+        const url = await uploadImage(f);
+        setImages((cur) => [...cur, url]);
+      } catch {
+        /* keep editing; the image just didn't attach */
+      }
+    }
+  };
+
   const start = () => {
     setText(bodyOf(c));
     setImages(c.images ?? []);
@@ -1765,6 +1883,12 @@ function CardBody({
           autoFocus
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            if (e.clipboardData.files.length > 0) {
+              e.preventDefault();
+              void addImageFiles(e.clipboardData.files);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
             if (e.key === 'Escape') setEditing(false);
@@ -1847,15 +1971,7 @@ function CardBody({
           multiple
           style={{ display: 'none' }}
           onChange={async (e) => {
-            for (const f of e.target.files ?? []) {
-              if (!f.type.startsWith('image/')) continue;
-              try {
-                const url = await uploadImage(f);
-                setImages((cur) => [...cur, url]);
-              } catch {
-                /* keep editing; the image just didn't attach */
-              }
-            }
+            await addImageFiles(e.target.files ?? []);
             e.target.value = '';
           }}
         />
@@ -2311,6 +2427,7 @@ export function App() {
   const [focusId, setFocusId] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Map<string, PinStatus>>(new Map());
+  const [deleted, setDeleted] = useState<ReviewComment[]>([]);
   const [askName, setAskName] = useState(false);
   // A capture or recording in progress: pins and chrome step aside so the page
   // is live (and out of the clip) until it ends.
@@ -2327,11 +2444,13 @@ export function App() {
   const lastPayload = useRef('');
   const refresh = useCallback(async () => {
     try {
-      const next = (await listComments()).sort((a, b) => a.createdAt - b.createdAt);
-      const payload = JSON.stringify(next);
+      const [live, gone] = await Promise.all([listComments(), listDeleted()]);
+      const next = live.sort((a, b) => a.createdAt - b.createdAt);
+      const payload = JSON.stringify({ next, gone });
       if (payload === lastPayload.current) return;
       lastPayload.current = payload;
       setComments(next);
+      setDeleted(gone);
     } catch {
       /* transient — the next poll or mutation refreshes again */
     }
@@ -2550,6 +2669,13 @@ export function App() {
     },
     [refresh],
   );
+  const restore = useCallback(
+    async (c: ReviewComment) => {
+      await restoreComment(c.id);
+      await refresh();
+    },
+    [refresh],
+  );
 
   return (
     <>
@@ -2615,6 +2741,8 @@ export function App() {
           onDelete={(c) => void remove(c)}
           onReply={reply}
           onDeleteReply={(c, rid) => void removeReply(c, rid)}
+          deleted={deleted}
+          onRestore={(c) => void restore(c)}
           onClearResolved={() => void clearResolved()}
           onClose={() => {
             setSidebarOpen(false);

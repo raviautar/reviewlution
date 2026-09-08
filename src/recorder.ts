@@ -205,8 +205,21 @@ export async function startRecording(rect: Rect): Promise<Recording> {
   return { startedAt: Date.now(), cropped, stop, onEnded: (cb) => endedCbs.push(cb) };
 }
 
-/** One frame of the chosen area as a PNG: the same capture as a recording, stopped after the first frame. */
-export async function captureRegion(rect: Rect): Promise<Blob> {
+/**
+ * Arm a still capture of the chosen area. The tab is captured and kept live so
+ * the reviewer can set the page up — re-open a dropdown a click had closed —
+ * before `grab()` takes the frame; `cancel()` drops the capture untaken. This
+ * two-step shape is what lets a capture include an open menu: nothing is
+ * clicked at the moment the frame is taken.
+ */
+export interface ArmedCapture {
+  /** True when the capture is this tab and the frame is cropped to the chosen area. */
+  cropped: boolean;
+  grab: () => Promise<Blob>;
+  cancel: () => void;
+}
+
+export async function beginCapture(rect: Rect): Promise<ArmedCapture> {
   const constraints = {
     video: { frameRate: 5 },
     audio: false,
@@ -215,38 +228,47 @@ export async function captureRegion(rect: Rect): Promise<Blob> {
     surfaceSwitching: 'exclude',
   };
   const stream = await navigator.mediaDevices.getDisplayMedia(constraints as DisplayMediaStreamOptions);
-  try {
-    const track = stream.getVideoTracks()[0];
-    if (!track) throw new Error('no video track');
-    const video = document.createElement('video');
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    await video.play();
-    if (!video.videoWidth)
-      await new Promise<void>((r) =>
-        video.addEventListener('loadedmetadata', () => r(), { once: true }),
-      );
-    // The first frames of a tab capture can still be blank; give it a moment.
-    await new Promise((r) => setTimeout(r, 250));
-    const surface = (track.getSettings() as MediaTrackSettings & { displaySurface?: string })
-      .displaySurface;
-    const cropped = surface === 'browser';
-    const sx = video.videoWidth / window.innerWidth;
-    const sy = video.videoHeight / window.innerHeight;
-    const crop = cropped
-      ? { x: rect.x * sx, y: rect.y * sy, w: rect.w * sx, h: rect.h * sy }
-      : { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(2, Math.round(crop.w));
-    canvas.height = Math.max(2, Math.round(crop.h));
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('no canvas');
-    ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height);
-    return await new Promise<Blob>((resolve, reject) =>
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('no image'))), 'image/png'),
-    );
-  } finally {
+  const track = stream.getVideoTracks()[0];
+  if (!track) {
     for (const t of stream.getTracks()) t.stop();
+    throw new Error('no video track');
   }
+  const video = document.createElement('video');
+  video.srcObject = stream;
+  video.muted = true;
+  video.playsInline = true;
+  await video.play();
+  if (!video.videoWidth)
+    await new Promise<void>((r) =>
+      video.addEventListener('loadedmetadata', () => r(), { once: true }),
+    );
+  const surface = (track.getSettings() as MediaTrackSettings & { displaySurface?: string })
+    .displaySurface;
+  const cropped = surface === 'browser';
+  const cancel = () => {
+    for (const t of stream.getTracks()) t.stop();
+  };
+  const grab = async (): Promise<Blob> => {
+    try {
+      // The frame is read against the live viewport size, so a page that
+      // reflowed while the reviewer set it up still crops to the right box.
+      const sx = video.videoWidth / window.innerWidth;
+      const sy = video.videoHeight / window.innerHeight;
+      const crop = cropped
+        ? { x: rect.x * sx, y: rect.y * sy, w: rect.w * sx, h: rect.h * sy }
+        : { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(2, Math.round(crop.w));
+      canvas.height = Math.max(2, Math.round(crop.h));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('no canvas');
+      ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height);
+      return await new Promise<Blob>((resolve, reject) =>
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('no image'))), 'image/png'),
+      );
+    } finally {
+      cancel();
+    }
+  };
+  return { cropped, grab, cancel };
 }
