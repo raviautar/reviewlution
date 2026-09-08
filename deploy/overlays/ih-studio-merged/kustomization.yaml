@@ -8,7 +8,7 @@ resources:
 images:
   - name: ghcr.io/raviautar/review-toolbar
     newName: wandserviceplatform.azurecr.io/images/review-toolbar
-    newTag: "d8c784a"
+    newTag: "105cfc7"
 patches:
   - target:
       kind: PersistentVolumeClaim
