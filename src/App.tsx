@@ -140,6 +140,23 @@ function outlineOf(el: Element): Outline | null {
   };
 }
 
+/**
+ * A pin sitting on a control the size of a button would take the click the
+ * control is for, so on anything that short it hangs just above the control
+ * (below it when there is no room), where the outline on hover still ties the
+ * two together. A card or a panel keeps the pin at the exact spot: it covers a
+ * corner of it, and the specific place is what the comment is about.
+ */
+const CONTROL_H = 56;
+const CONTROLS = 'button, a, input, select, textarea, label, [role="button"], [role="tab"], [role="link"], [role="option"], [role="menuitem"]';
+function clearOfControl(pos: { x: number; y: number }, el: Element): { x: number; y: number } {
+  // A click lands on the label inside a button as often as on the button; the
+  // control is what must stay clickable, so clear the whole of it.
+  const r = (el.closest(CONTROLS) ?? el).getBoundingClientRect();
+  if (r.height > CONTROL_H) return pos;
+  return { x: pos.x, y: r.top >= 26 ? r.top - 13 : r.bottom + 13 };
+}
+
 function sameOutline(a: Outline | null, b: Outline | null): boolean {
   if (!a || !b) return a === b;
   return (
@@ -231,8 +248,13 @@ function PinLayer({
         let pos: { x: number; y: number } | null = null;
         for (const a of anchors) {
           // Keyed by selector too, so a pin moved to another element re-resolves.
-          pos = resolveAnchor(doc, a, cache.current, `${c.id}|${a.selector}`);
-          if (pos) break;
+          const key = `${c.id}|${a.selector}`;
+          pos = resolveAnchor(doc, a, cache.current, key);
+          if (pos) {
+            const el = cache.current.get(key)?.el;
+            if (el) pos = clearOfControl(pos, el);
+            break;
+          }
         }
         const onOwnPage = c.page === route;
         statuses.set(c.id, pos ? 'here' : onOwnPage ? (anchors.length ? 'missing' : 'here') : 'elsewhere');
@@ -276,7 +298,11 @@ function PinLayer({
       });
       if (pending) {
         const pos = pending.anchor
-          ? resolveAnchor(doc, pending.anchor, cache.current, '__pending')
+          ? (() => {
+              const at = resolveAnchor(doc, pending.anchor, cache.current, '__pending');
+              const el = cache.current.get('__pending')?.el;
+              return at && el ? clearOfControl(at, el) : at;
+            })()
           : { x: (pending.x / 100) * window.innerWidth, y: (pending.y / 100) * window.innerHeight };
         setPendingPos((cur) =>
           pos && (!cur || Math.abs(cur.x - pos.x) > 0.5 || Math.abs(cur.y - pos.y) > 0.5)
