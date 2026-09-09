@@ -298,6 +298,9 @@ app.register(fastifyStatic, {
 app.register(httpProxy, {
   upstream: UPSTREAM,
   prefix: '/',
+  // A dev server behind the proxy (Vite, Storybook) keeps hot reload through
+  // its websocket; without this the page still works, it just stops updating.
+  websocket: true,
   replyOptions: {
     rewriteHeaders: (headers) => {
       const out = { ...headers };
