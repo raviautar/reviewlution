@@ -14,4 +14,4 @@ resources:
 images:
   - name: ghcr.io/raviautar/review-toolbar
     newName: wandserviceplatform.azurecr.io/images/review-toolbar
-    newTag: "6736582"
+    newTag: "51e2775"
