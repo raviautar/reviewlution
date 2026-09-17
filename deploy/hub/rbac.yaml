@@ -1,0 +1,33 @@
+# Ingresses in its own namespace, nothing else: enough to add and remove the
+# review ingress of each preview (hub.mjs only ever changes the ones it labelled).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: review-hub
+  labels:
+    app.kubernetes.io/name: review-hub
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: review-hub
+  labels:
+    app.kubernetes.io/name: review-hub
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: review-hub
+  labels:
+    app.kubernetes.io/name: review-hub
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: review-hub
+subjects:
+  - kind: ServiceAccount
+    name: review-hub

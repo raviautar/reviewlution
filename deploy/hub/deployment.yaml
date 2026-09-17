@@ -1,0 +1,69 @@
+# One replica: the comment files and the ingress reconciler both assume a
+# single writer. Recreate, because the data disk attaches to one node at a time.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: review-hub
+  labels:
+    app.kubernetes.io/name: review-hub
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: review-hub
+  template:
+    metadata:
+      labels:
+        app: review-hub
+    spec:
+      serviceAccountName: review-hub
+      containers:
+        - name: review-toolbar
+          image: ghcr.io/raviautar/review-toolbar:latest
+          ports:
+            - containerPort: 8090
+              protocol: TCP
+          env:
+            - name: HUB_APP
+              value: wand-studio
+            - name: HUB_UPSTREAM
+              value: http://{preview}:8080
+            - name: HUB_TITLE
+              value: Studio
+            - name: HUB_RECONCILE
+              value: "1"
+            - name: HUB_SERVICE
+              value: review-hub
+            - name: DATA_DIR
+              value: /data
+            - name: DEFAULT_ROUTE
+              value: /
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /__review/healthz
+              port: 8090
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /__review/healthz
+              port: 8090
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          # Recordings up to 250 MB are buffered in memory while they upload.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: review-hub-data

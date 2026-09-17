@@ -1,0 +1,17 @@
+# The review hub for wand-studio's pull-request previews on the dev cluster.
+# One server fronts every wand-studio-pr-<n> preview at
+# wand-studio-pr-<n>-review.dev.wand.ai, keeps each PR's comments in its own
+# folder on one disk, and creates and removes the per-preview ingresses itself,
+# so a new pull request gets its review host with nothing deployed by hand.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: wand-studio
+resources:
+  - rbac.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+images:
+  - name: ghcr.io/raviautar/review-toolbar
+    newName: wandserviceplatform.azurecr.io/images/review-toolbar
+    newTag: "latest"

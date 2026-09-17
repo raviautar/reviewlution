@@ -7,7 +7,8 @@
   "scripts": {
     "build": "vite build",
     "start": "node server.mjs",
-    "dev": "vite"
+    "dev": "vite",
+    "test": "node --test hub.test.mjs"
   },
   "dependencies": {
     "@fastify/http-proxy": "^11.1.2",

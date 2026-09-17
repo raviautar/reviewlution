@@ -34,6 +34,13 @@ UPSTREAM=http://localhost:5173 DEFAULT_ROUTE=/ npm start   # http://localhost:80
 | `DATA_FILE` | `./comments.json` | Comment store. Images and videos go next to it (`images/`, `videos/`); every mutation is also appended to `<DATA_FILE>l`. |
 | `DEFAULT_ROUTE` | `/` | Where a visit to `/` (or to `/__review`) lands in the app. |
 | `APP_TITLE` | `Preview · Review` | Browser tab title. |
+| `HUB_APP` | unset | Hub mode: front every pull-request preview of this app (see below). `UPSTREAM`, `DATA_FILE` and `APP_TITLE` are then unused. |
+| `HUB_UPSTREAM` | `http://{preview}:8080` | Hub mode: where a preview is reached; `{preview}` is `<app>-pr-<n>`, `{n}` the PR number. |
+| `HUB_TITLE` | `Preview` | Hub mode: tab title prefix, shown as `<title> PR <n> · Review`. |
+| `DATA_DIR` | `./data` | Hub mode: each preview's store is `DATA_DIR/<app>-pr-<n>/comments.json`. |
+| `HUB_RECONCILE` | unset | Hub mode: `1` keeps one ingress per live preview (needs the RBAC in `deploy/hub`). |
+| `HUB_SERVICE` | `review-hub` | Hub mode: the service those ingresses point at. |
+| `HUB_INTERVAL_MS` | `30000` | Hub mode: how often the ingresses are checked. |
 
 The server caches the built `dist/index.html`; after a rebuild, restart it.
 
@@ -43,6 +50,17 @@ The server caches the built `dist/index.html`; after a rebuild, restart it.
 
 ```bash
 kubectl apply -k deploy/overlays/ih-studio-preview
+```
+
+### Every pull-request preview (hub mode)
+
+`deploy/hub` runs one server for all of wand-studio's PR previews in the `wand-studio` namespace. A request to `wand-studio-pr-<n>-review.dev.wand.ai` is proxied to the `wand-studio-pr-<n>` service, and that PR's comments, images and videos live in their own folder on the hub's disk. Any other host gets a 404.
+
+Nobody deploys anything per PR. Every 30 seconds the hub lists the ingresses ArgoCD made for previews (`wand-studio-pr-<n>`) and keeps a matching `review-hub-pr-<n>` ingress, with the preview's ingress class, certificate issuer and DNS settings. When a PR closes and its preview goes, the review ingress goes too; the comments stay on disk. The hub only changes ingresses it labelled itself (`app.kubernetes.io/managed-by: review-hub`), and it skips a review host that another ingress already serves.
+
+```bash
+kubectl apply -k deploy/hub
+kubectl -n wand-studio exec deploy/review-hub -- wget -qO- localhost:8090/__review/healthz   # live previews + last run
 ```
 
 Images are published to `ghcr.io/raviautar/review-toolbar:<sha>` on every push to `main` (`.github/workflows/publish.yaml`). Clusters that pull from another registry retag the image there.
