@@ -705,6 +705,16 @@ function Bubble({
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<{ dx: number; dy: number } | null>(null);
   const annotate = mode === 'annotate';
+  // A position saved on a wide window can sit past the edge of a narrow one, so
+  // the saved spot is clamped to the window as it is now, on every resize.
+  const [, setViewport] = useState(0);
+  useEffect(() => {
+    const onResize = () => setViewport((n) => n + 1);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const size = ref.current?.getBoundingClientRect();
+  const shown = pos ? clampPos(pos, size?.width ?? 160, size?.height ?? 42) : null;
 
   const onGripDown = (e: React.PointerEvent) => {
     const el = ref.current;
@@ -745,7 +755,7 @@ function Bubble({
       ref={ref}
       style={{
         position: 'fixed',
-        ...(pos ? { left: pos.x, top: pos.y } : { right: 18, bottom: 18 }),
+        ...(shown ? { left: shown.x, top: shown.y } : { right: 18, bottom: 18 }),
         display: 'flex',
         alignItems: 'center',
         gap: 2,
