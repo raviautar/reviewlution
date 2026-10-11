@@ -8,5 +8,5 @@
     "outDir": "dist-lib"
   },
   "include": [],
-  "files": ["src/lib.tsx"]
+  "files": ["src/lib.tsx", "src/server/index.ts", "src/store/file.ts", "src/store/supabase.ts"]
 }

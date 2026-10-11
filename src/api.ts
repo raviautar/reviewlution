@@ -5,7 +5,6 @@
  * components reach the client through ApiContext.
  */
 import { createContext, useContext } from 'react';
-import type { Anchor } from './anchors.js';
 
 export const ACCENT = '#5b2fcc';
 // The toolbar was called review-toolbar until 2026-10-11; carry a reviewer's
@@ -33,48 +32,8 @@ export const DRAFT_KEY = 'reviewlution-draft';
 export const COLLAPSED_KEY = 'reviewlution-collapsed';
 export const DEFAULT_API_BASE = '/__review/api';
 
-/** A one-level reply; replies cannot be replied to. */
-export interface Reply {
-  id: string;
-  text: string;
-  author?: string;
-  createdAt: number;
-}
-
-export interface ReviewComment {
-  id: string;
-  /** Set only on comments in the deleted store. */
-  deletedAt?: number;
-  text: string;
-  /** Legacy fallback position, percent of the viewport. */
-  x: number;
-  y: number;
-  createdAt: number;
-  color?: string;
-  resolved?: boolean;
-  author?: string;
-  page?: string;
-  images?: string[];
-  /** Screen recordings attached to the comment. */
-  videos?: string[];
-  /** Element anchoring — pins glue to the element, and agents get the context. */
-  anchor?: Anchor;
-  /** Every element the comment is about, when there is more than one; `anchor` is the first. */
-  anchors?: Anchor[];
-  replies?: Reply[];
-  /** Where the reviewer was looking from: emulated device and viewport size. */
-  viewport?: Viewport;
-  /** The build the comment was left on (e.g. `prod`, `pr-12`), when the host tags builds. */
-  build?: string;
-}
-
-export interface Viewport {
-  w: number;
-  h: number;
-  dpr: number;
-  ua: string;
-  device: string;
-}
+export type { Reply, ReviewComment, Viewport } from './types.js';
+import type { Viewport, ReviewComment } from './types.js';
 
 // Chrome on Android freezes the UA's model to the literal "K"; the real one
 // only comes from client hints, fetched once and remembered for later labels.
@@ -121,6 +80,7 @@ export function createApi(base: string = DEFAULT_API_BASE, build?: string) {
   const API = `${root}/comments`;
   const scope = build ? `?build=${encodeURIComponent(build)}` : '';
   return {
+    base: root,
     build,
 
     async addReply(commentId: string, text: string, author: string): Promise<void> {

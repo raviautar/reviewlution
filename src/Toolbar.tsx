@@ -1293,6 +1293,7 @@ function Sidebar({
     cardRefs.current.get(focusId)?.scrollIntoView({ block: 'center' });
   }, [focusId, comments]);
 
+  const { base: apiBase } = useApi();
   const [copiedTick, setCopiedTick] = useState(false);
   const copyShown = () => {
     const origin = location.origin;
@@ -1326,7 +1327,7 @@ function Sidebar({
         where.push(`position: ${Math.round(c.x)}%,${Math.round(c.y)}% of the viewport (no element anchor)`);
       }
       if (c.viewport) where.push(`viewport: ${c.viewport.device} · ${c.viewport.w}×${c.viewport.h} @${c.viewport.dpr}x`);
-      where.push(`from: ${origin}${c.page ?? '/'}`, `comment id: ${c.id} (API: ${origin}/__review/api/comments/${c.id})`);
+      where.push(`from: ${origin}${c.page ?? '/'}`, `comment id: ${c.id} (API: ${origin}${apiBase}/comments/${c.id})`);
       return [head, c.text, ...where, ...media, ...replies].join('\n');
     });
     const doc = `## ${tab === 'resolved' ? 'Resolved' : 'Open'} comments (${shown.length})\n\n${lines.join('\n\n')}\n`;
@@ -2475,6 +2476,8 @@ export interface ToolbarProps {
   build?: string;
   /** A known reviewer name: stored as if typed when none is stored yet, so the name prompt is skipped. */
   author?: string | null;
+  /** The page a comment saved without one belongs to (comments from before pages were recorded). */
+  defaultRoute?: string;
   /** Accessible name of the toolbar's region. */
   title?: string;
 }
@@ -2496,6 +2499,7 @@ function ToolbarBody({
   route,
   onNavigate,
   author: knownAuthor,
+  defaultRoute,
   title = 'reviewlution',
 }: Omit<ToolbarProps, 'apiBase' | 'build'>) {
   const api = useApi();
@@ -2537,7 +2541,9 @@ function ToolbarBody({
   const refresh = useCallback(async () => {
     try {
       const [live, gone] = await Promise.all([listComments(), listDeleted()]);
-      const next = live.sort((a, b) => a.createdAt - b.createdAt);
+      const next = live
+        .map((c) => (c.page || !defaultRoute ? c : { ...c, page: defaultRoute }))
+        .sort((a, b) => a.createdAt - b.createdAt);
       const payload = JSON.stringify({ next, gone });
       if (payload === lastPayload.current) return;
       lastPayload.current = payload;
@@ -2546,7 +2552,7 @@ function ToolbarBody({
     } catch {
       /* transient — the next poll or mutation refreshes again */
     }
-  }, [listComments, listDeleted]);
+  }, [listComments, listDeleted, defaultRoute]);
   useEffect(() => {
     void refresh();
     const tick = () => {

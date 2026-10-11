@@ -25,6 +25,8 @@ export interface ReviewToolbarProps {
   route?: string;
   /** Navigate to a comment's page. Default: `location.assign`. */
   onNavigate?: (path: string) => void;
+  /** The page a comment saved without one belongs to (comments from before pages were recorded). */
+  defaultRoute?: string;
   /** Accessible name of the toolbar's region. Default `reviewlution`. */
   title?: string;
 }
@@ -52,7 +54,7 @@ function useLocationRoute(enabled: boolean): string {
 
 const assign = (path: string) => location.assign(path);
 
-export function ReviewToolbar({ apiBase, build, author, route, onNavigate, title }: ReviewToolbarProps) {
+export function ReviewToolbar({ apiBase, build, author, route, onNavigate, defaultRoute, title }: ReviewToolbarProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const watched = useLocationRoute(route === undefined);
@@ -65,6 +67,7 @@ export function ReviewToolbar({ apiBase, build, author, route, onNavigate, title
       author={author}
       route={route ?? watched}
       onNavigate={onNavigate ?? assign}
+      defaultRoute={defaultRoute}
       title={title}
     />
   );

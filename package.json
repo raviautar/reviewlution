@@ -1,22 +1,40 @@
 {
   "name": "reviewlution",
   "version": "0.1.0",
-  "description": "Review toolbar for web apps: element-anchored comment pins, replies and a comments API for agents. Runs as a React component inside the app, or as a proxy that frames any app.",
+  "description": "Review toolbar for web apps: element-anchored comment pins, replies and a comments API for agents. A React component, a web-standard API handler and stores for a JSON file or Supabase; or a proxy that frames any app.",
   "type": "module",
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/raviautar/reviewlution.git"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "exports": {
     ".": {
       "types": "./dist-lib/lib.d.ts",
       "import": "./dist-lib/lib.js"
-    }
+    },
+    "./server": {
+      "types": "./dist-lib/server/index.d.ts",
+      "import": "./dist-lib/server/index.js"
+    },
+    "./store/file": {
+      "types": "./dist-lib/store/file.d.ts",
+      "import": "./dist-lib/store/file.js"
+    },
+    "./store/supabase": {
+      "types": "./dist-lib/store/supabase.d.ts",
+      "import": "./dist-lib/store/supabase.js"
+    },
+    "./sql/supabase.sql": "./sql/supabase.sql",
+    "./package.json": "./package.json"
   },
   "types": "./dist-lib/lib.d.ts",
   "files": [
-    "dist-lib"
+    "dist-lib",
+    "sql"
   ],
   "sideEffects": false,
   "scripts": {
@@ -26,7 +44,8 @@
     "start": "node server.mjs",
     "dev": "vite",
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --test hub.test.mjs"
+    "test": "node --test hub.test.mjs handler.test.mjs",
+    "pretest": "npm run build:lib"
   },
   "dependencies": {
     "@fastify/http-proxy": "^11.1.2",
@@ -35,10 +54,18 @@
     "modern-screenshot": "^4.7.0"
   },
   "peerDependencies": {
+    "@supabase/supabase-js": "^2.0.0",
     "react": "^18.2.0 || ^19.0.0",
     "react-dom": "^18.2.0 || ^19.0.0"
   },
+  "peerDependenciesMeta": {
+    "@supabase/supabase-js": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@supabase/supabase-js": "^2.117.3",
+    "@types/node": "^20.19.43",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
