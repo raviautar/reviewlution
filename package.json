@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Review toolbar for web apps: element-anchored comment pins, replies and a comments API for agents. A React component, a web-standard API handler and stores for a JSON file or Supabase; or a proxy that frames any app.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/raviautar/reviewlution.git"
@@ -48,9 +48,6 @@
     "pretest": "npm run build:lib"
   },
   "dependencies": {
-    "@fastify/http-proxy": "^11.1.2",
-    "@fastify/static": "^8.0.4",
-    "fastify": "^5.2.1",
     "modern-screenshot": "^4.7.0"
   },
   "peerDependencies": {
@@ -64,11 +61,14 @@
     }
   },
   "devDependencies": {
+    "@fastify/http-proxy": "^11.1.2",
+    "@fastify/static": "^8.0.4",
     "@supabase/supabase-js": "^2.117.3",
     "@types/node": "^20.19.43",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "fastify": "^5.2.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^5.7.2",

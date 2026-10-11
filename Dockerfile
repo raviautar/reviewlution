@@ -12,7 +12,8 @@ LABEL org.opencontainers.image.title=reviewlution
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# Fastify is a dev dependency of the package (npm consumers never run the shell), so the full install.
+RUN npm ci
 COPY --from=build /app/dist dist
 COPY --from=build /app/dist-lib dist-lib
 COPY server.mjs hub.mjs ./
