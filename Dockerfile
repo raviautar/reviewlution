@@ -7,6 +7,8 @@ COPY src src
 RUN npm run build
 
 FROM node:22-alpine
+LABEL org.opencontainers.image.source=https://github.com/raviautar/reviewlution
+LABEL org.opencontainers.image.title=reviewlution
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./

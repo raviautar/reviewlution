@@ -1,9 +1,9 @@
 /**
- * The review host. One origin, three jobs:
+ * The reviewlution host. One origin, three jobs:
  *
  *   /__review/           the shell (built by vite) + the comments API
  *   everything else      proxied to the studio preview, so the iframe the
- *                        shell renders is same-origin and washi can read it
+ *                        shell renders is same-origin and the toolbar can read it
  *
  * Comments persist to one JSON file (a volume in the cluster). Access control
  * is the VPN in front of the ingress; there are no accounts anywhere.
@@ -31,7 +31,7 @@ const DATA_FILE = process.env.DATA_FILE ?? './comments.json';
 const DELETED_CAP = 500;
 // Where a visit to `/` (or to /__review itself) lands, and the browser tab title.
 const DEFAULT_ROUTE = process.env.DEFAULT_ROUTE ?? '/';
-const APP_TITLE = process.env.APP_TITLE ?? 'Preview · Review';
+const APP_TITLE = process.env.APP_TITLE ?? 'Preview · reviewlution';
 const HUB_APP = process.env.HUB_APP ?? '';
 // `{preview}` is `<app>-pr-<n>`, `{n}` the pull request number.
 const HUB_UPSTREAM = process.env.HUB_UPSTREAM ?? 'http://{preview}:8080';

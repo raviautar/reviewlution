@@ -12,6 +12,6 @@ resources:
   - deployment.yaml
   - service.yaml
 images:
-  - name: ghcr.io/raviautar/review-toolbar
+  - name: ghcr.io/raviautar/reviewlution
     newName: wandserviceplatform.azurecr.io/images/review-toolbar
     newTag: "51e2775"

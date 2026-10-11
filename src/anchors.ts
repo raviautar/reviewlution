@@ -9,7 +9,27 @@
  * identity (tag, ids, labels, text) is stored with it and checked on every
  * resolve: a lookalike at the same position does not get the pin, and an
  * element that moved is found again by that identity.
+ *
+ * Drawn over the page itself (the in-page host), the toolbar shares the
+ * document with the app, so everything here looks past its own nodes, marked
+ * with TOOLBAR_ATTR: a pin never lands on a pin, the sidebar or the dialog.
+ * In the iframe shell the app's document has none of them and nothing changes.
  */
+
+/** Set on the toolbar's root and on every node it appends to the body. */
+export const TOOLBAR_ATTR = 'data-reviewlution';
+
+export function isToolbarNode(el: Element): boolean {
+  return el.closest(`[${TOOLBAR_ATTR}]`) !== null;
+}
+
+/** The app's own element under a viewport point, looking through the toolbar's layers. */
+export function pageElementAt(doc: Document, x: number, y: number): Element | null {
+  for (const el of doc.elementsFromPoint(x, y)) {
+    if (!isToolbarNode(el)) return el;
+  }
+  return null;
+}
 
 export interface AnchorElementInfo {
   tag: string;
@@ -123,6 +143,7 @@ export function elementsInRect(doc: Document, box: Box, cap = 24): Element[] {
   const inside: Element[] = [];
   for (const el of Array.from(doc.body.querySelectorAll('*'))) {
     if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
+    if (isToolbarNode(el)) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) continue;
     if (r.width > win.innerWidth * 0.9 && r.height > win.innerHeight * 0.9) continue;
@@ -135,9 +156,9 @@ export function elementsInRect(doc: Document, box: Box, cap = 24): Element[] {
   return outer.slice(0, cap);
 }
 
-/** Build the anchor for a click at viewport coordinates inside the iframe doc. */
+/** Build the anchor for a click at viewport coordinates inside the app's document. */
 export function anchorAt(doc: Document, x: number, y: number): Anchor | null {
-  const el = doc.elementFromPoint(x, y);
+  const el = pageElementAt(doc, x, y);
   if (!el || el.tagName === 'HTML') return null;
   const r = el.getBoundingClientRect();
   return {
@@ -161,14 +182,16 @@ export function findAnchored(doc: Document, anchor: Anchor): Element | null {
   } catch {
     el = null;
   }
-  if (el && matchesElement(el, anchor.element)) return el;
+  if (el && !isToolbarNode(el) && matchesElement(el, anchor.element)) return el;
   const info = anchor.element;
   if (!info.text && !info.id && !info.testId && !info.ariaLabel) return null;
-  const candidates = Array.from(doc.querySelectorAll(info.tag)).filter((c) => matchesElement(c, info));
+  const candidates = Array.from(doc.querySelectorAll(info.tag)).filter(
+    (c) => !isToolbarNode(c) && matchesElement(c, info),
+  );
   return candidates.length === 1 ? (candidates[0] ?? null) : null;
 }
 
-/** Where the anchored pin sits right now, in iframe-viewport coordinates. */
+/** Where the anchored pin sits right now, in the app's viewport coordinates. */
 export function resolveAnchor(
   doc: Document,
   anchor: Anchor,

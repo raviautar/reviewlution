@@ -6,7 +6,7 @@ namespace: ih-studio-v2
 resources:
   - ../../base
 images:
-  - name: ghcr.io/raviautar/review-toolbar
+  - name: ghcr.io/raviautar/reviewlution
     newName: wandserviceplatform.azurecr.io/images/review-toolbar
     newTag: "105cfc7"
 patches:

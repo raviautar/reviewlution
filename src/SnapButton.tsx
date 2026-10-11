@@ -7,7 +7,9 @@
  */
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { uploadImage } from './api.js';
+import { useApi } from './api.js';
+import { TOOLBAR_ATTR } from './anchors.js';
+import { useHost } from './host.js';
 import { CameraIcon } from './icons.js';
 import {
   type ArmedCapture,
@@ -31,12 +33,14 @@ export function SnapButton({
   iconSize = 14,
 }: {
   onDone: (url: string) => void;
-  /** Called with true while an area is picked or captured, so the shell can step aside. */
+  /** Called with true while an area is picked or captured, so the toolbar can step aside. */
   onBusy?: (busy: boolean) => void;
   style?: CSSProperties;
   className?: string;
   iconSize?: number;
 }) {
+  const { uploadImage } = useApi();
+  const host = useHost();
   const [phase, setPhase] = useState<Phase>('idle');
   const [left, setLeft] = useState(COUNTDOWN);
   const [area, setArea] = useState<Rect | null>(null);
@@ -92,7 +96,7 @@ export function SnapButton({
       // One tap on a phone: the page as it stands, straight into the comment.
       setPhase('capturing');
       try {
-        const blob = await capturePage();
+        const blob = await capturePage(host.win());
         const file = new File([blob], 'capture.png', { type: 'image/png' });
         onDone(await uploadImage(file));
       } catch {
@@ -128,13 +132,15 @@ export function SnapButton({
   const hud =
     phase === 'countdown' || phase === 'capturing'
       ? createPortal(
-          <CaptureHud
-            area={area}
-            left={left}
-            capturing={phase === 'capturing'}
-            onNow={() => void take()}
-            onCancel={cancel}
-          />,
+          <div {...{ [TOOLBAR_ATTR]: '' }}>
+            <CaptureHud
+              area={area}
+              left={left}
+              capturing={phase === 'capturing'}
+              onNow={() => void take()}
+              onCancel={cancel}
+            />
+          </div>,
           document.body,
         )
       : null;

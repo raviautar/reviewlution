@@ -1,9 +1,12 @@
-# review-toolbar
+# reviewlution
 
-A review toolbar for web app previews. It sits in front of the app as a reverse proxy, shows the app in a same-origin iframe, and lets reviewers pin comments to the elements they are looking at. Agents read and answer the same comments through a small JSON API.
+A review toolbar for web app previews: reviewers pin comments to the elements they are looking at, and agents read and answer the same comments through a small JSON API. It runs two ways, from the same components:
+
+- **In the app**, as a React component (`ReviewToolbar`) the app mounts on its preview builds. The app serves the comments API itself. See [Use it as a React component](#use-it-as-a-react-component).
+- **In front of the app**, as a reverse proxy that shows the app in a same-origin iframe and serves the API from its own disk. Nothing in the app changes. The rest of this page up to "Deploy" describes this mode.
 
 ```
-browser ──► review-toolbar (:8090) ──► your app (UPSTREAM)
+browser ──► reviewlution (:8090) ──► your app (UPSTREAM)
               │  /__review/*   shell assets + comments API (own origin, /data volume)
               └─ everything else is proxied to the app, unchanged
 ```
@@ -17,7 +20,7 @@ A top-level page load of any app path gets the shell; the shell iframes the same
 - Pins can be dragged onto another element; a pin shows on its element when that element is on the page (identity is checked, not just position). On a control the size of a button the pin hangs just above it, so the control stays clickable. When the element is gone from the comment's page — a redesigned build, a different tab state — a grey dashed ghost pin marks the original spot instead, the card says "element missing on this build", and every anchored card names the element it points at (e.g. `button · “Test Connection”`).
 - Capture area waits a few seconds after you pick the box, keeping the page live, so you can re-open a dropdown a click had closed before the frame is taken (or press Capture now). Images can be pasted into a comment while editing it, not only when first writing it.
 - Deleting is a two-press action; deleted comments go to a **Deleted** tab where each can be restored with its pin, thread and images. The server keeps them (`GET /__review/api/deleted`, `POST /__review/api/comments/:id/restore`).
-- The comment list (⌥L) covers every page; a card's route chip navigates the iframe there; cards collapse to one line.
+- The comment list (⌥L) covers every page; a card's route chip navigates the app there; cards collapse to one line.
 
 ## Run it
 
@@ -33,7 +36,7 @@ UPSTREAM=http://localhost:5173 DEFAULT_ROUTE=/ npm start   # http://localhost:80
 | `PORT` | `8090` | Listen port. |
 | `DATA_FILE` | `./comments.json` | Comment store. Images and videos go next to it (`images/`, `videos/`); every mutation is also appended to `<DATA_FILE>l`. |
 | `DEFAULT_ROUTE` | `/` | Where a visit to `/` (or to `/__review`) lands in the app. |
-| `APP_TITLE` | `Preview · Review` | Browser tab title. |
+| `APP_TITLE` | `Preview · reviewlution` | Browser tab title. |
 | `HUB_APP` | unset | Hub mode: front every pull-request preview of this app (see below). `UPSTREAM`, `DATA_FILE` and `APP_TITLE` are then unused. |
 | `HUB_UPSTREAM` | `http://{preview}:8080` | Hub mode: where a preview is reached; `{preview}` is `<app>-pr-<n>`, `{n}` the PR number. |
 | `HUB_TITLE` | `Preview` | Hub mode: tab title prefix, shown as `<title> PR <n> · Review`. |
@@ -63,13 +66,38 @@ kubectl apply -k deploy/hub
 kubectl -n wand-studio exec deploy/review-hub -- wget -qO- localhost:8090/__review/healthz   # live previews + last run
 ```
 
-Images are published to `ghcr.io/raviautar/review-toolbar:<sha>` on every push to `main` (`.github/workflows/publish.yaml`). Clusters that pull from another registry retag the image there.
+Images are published to `ghcr.io/raviautar/reviewlution:<sha>` on every push to `main` (`.github/workflows/publish.yaml`). Clusters that pull from another registry retag the image there.
+
+## Use it as a React component
+
+```bash
+npm install reviewlution   # react and react-dom 18 or 19 are peers
+```
+
+```tsx
+import { ReviewToolbar } from 'reviewlution';
+
+<ReviewToolbar apiBase="/__review/api" build="pr-12" author="Ravi" />;
+```
+
+| Prop | Default | Meaning |
+|---|---|---|
+| `apiBase` | `/__review/api` | Where the app serves the API below. |
+| `build` | unset | A tag for this build (`prod`, `pr-12`): sent as `build` on every comment created, and the lists ask for `?build=<tag>`, so each preview keeps its own pins. Unset: no tag, no filter. |
+| `author` | unset | The reviewer's name when the app knows it (a signed-in user). Stored as if typed, so the name prompt is skipped; the bubble's name button still changes it. |
+| `route` | `location.pathname + location.search`, watched | The page the app is on; comments are filed under it. Pass it from the app's router. |
+| `onNavigate` | `location.assign` | How a comment's route chip goes to its page. Pass the router's push. |
+| `title` | `reviewlution` | Accessible name of the toolbar's region. |
+
+The toolbar draws into the app's own document, above everything else (z-index near the 32-bit maximum), and marks every node it draws with `data-reviewlution` so anchoring, area selection and the phone capture look past it. It renders nothing on the server and appears after hydration. The module is marked `'use client'`, so a React Server Components app can render it from a server component. The app decides where it shows (a preview build, a cookie, a signed-in reviewer); the component shows wherever it is mounted.
+
+The app's API has to answer the routes below with the same payloads; `build` is one more field on a comment, and `GET /comments` and `GET /deleted` take `?build=`. Build the package with `npm run build:lib` (ES module and types in `dist-lib/`).
 
 ## API for agents
 
 All under `/__review/api`:
 
-- `GET /comments` — every comment (`?page=/path` filters). A comment carries `text`, `author`, `page`, `anchor` (selector, offsets, element identity), `images`, `resolved`, `replies`.
+- `GET /comments` — every comment (`?page=/path` filters; an app that tags builds also takes `?build=`). A comment carries `text`, `author`, `page`, `anchor` (selector, offsets, element identity), `images`, `resolved`, `replies`.
 - `POST /comments`, `PATCH /comments/:id` (any field; `page` only together with a new `anchor`), `DELETE /comments/:id`.
 - `POST /comments/:id/replies` `{text, author}`, `DELETE /comments/:id/replies/:rid`.
 - `POST /images` (raw image body) → `{url}`; `GET /images/:name`.

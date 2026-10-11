@@ -6,6 +6,8 @@
  * a window or whole-screen capture is recorded as is.
  */
 
+import { TOOLBAR_ATTR } from './anchors.js';
+
 export interface Rect {
   x: number;
   y: number;
@@ -21,13 +23,13 @@ export function displayCaptureSupported(): boolean {
 
 /**
  * Phones have no getDisplayMedia, so the whole visible page is rasterized from
- * the app's iframe document instead. The shell and its pins live in the parent
- * document, which keeps the toolbar out of the shot by construction.
+ * the app's document instead. In the iframe shell the toolbar lives in the
+ * parent document, out of the shot by construction; drawn over the page it
+ * shares the document, so its nodes (TOOLBAR_ATTR) are filtered out.
  */
-export async function capturePage(): Promise<Blob> {
-  const win = document.querySelector('iframe')?.contentWindow;
+export async function capturePage(win: Window | null): Promise<Blob> {
   const doc = win?.document;
-  if (!win || !doc) throw new Error('no app frame to capture');
+  if (!win || !doc) throw new Error('no app document to capture');
   const { domToBlob } = await import('modern-screenshot');
   const blob = await domToBlob(doc.documentElement, {
     width: win.innerWidth,
@@ -35,6 +37,7 @@ export async function capturePage(): Promise<Blob> {
     scale: Math.min(2, win.devicePixelRatio || 1),
     backgroundColor: getComputedStyle(doc.body).backgroundColor,
     style: { transform: `translate(${-win.scrollX}px, ${-win.scrollY}px)`, transformOrigin: 'top left' },
+    filter: (node) => !(node instanceof Element && node.hasAttribute(TOOLBAR_ATTR)),
   });
   if (!blob || blob.size === 0) throw new Error('capture produced nothing');
   return blob;
@@ -53,6 +56,7 @@ function norm(a: { x: number; y: number }, e: MouseEvent): Rect {
 export function selectRegion(): Promise<Rect | null> {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
+    overlay.setAttribute(TOOLBAR_ATTR, '');
     Object.assign(overlay.style, {
       position: 'fixed',
       inset: '0',

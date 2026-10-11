@@ -1,12 +1,13 @@
 /**
  * "Record screen" for a comment: choose an area, record it, stop whenever, and
  * hand the uploaded clip's URL back to the form. While recording the page is
- * live (the shell steps aside through onBusy), the chosen area is framed, and a
+ * live (the toolbar steps aside through onBusy), the chosen area is framed, and a
  * bar kept clear of that area shows the time and the Stop button.
  */
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { uploadVideo } from './api.js';
+import { useApi } from './api.js';
+import { TOOLBAR_ATTR } from './anchors.js';
 import { RecordIcon, StopIcon } from './icons.js';
 import { HIGHLIGHT, type Recording, type Rect, selectRegion, startRecording } from './recorder.js';
 
@@ -23,12 +24,13 @@ export function RecordButton({
   iconSize = 14,
 }: {
   onDone: (url: string) => void;
-  /** Called with true while selecting, recording or saving, so the shell can step aside. */
+  /** Called with true while selecting, recording or saving, so the toolbar can step aside. */
   onBusy?: (busy: boolean) => void;
   style?: CSSProperties;
   className?: string;
   iconSize?: number;
 }) {
+  const { uploadVideo } = useApi();
   const [phase, setPhase] = useState<Phase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -96,12 +98,14 @@ export function RecordButton({
   const hud =
     phase === 'recording' || phase === 'uploading'
       ? createPortal(
-          <RecordingHud
-            area={area}
-            elapsed={elapsed}
-            saving={phase === 'uploading'}
-            onStop={() => void finish()}
-          />,
+          <div {...{ [TOOLBAR_ATTR]: '' }}>
+            <RecordingHud
+              area={area}
+              elapsed={elapsed}
+              saving={phase === 'uploading'}
+              onStop={() => void finish()}
+            />
+          </div>,
           document.body,
         )
       : null;
