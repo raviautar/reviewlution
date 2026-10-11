@@ -34,6 +34,7 @@ export const DEFAULT_API_BASE = '/__review/api';
 
 export type { Reply, ReviewComment, Viewport } from './types.js';
 import type { Viewport, ReviewComment } from './types.js';
+import { reportError, reportedError } from './events.js';
 
 // Chrome on Android freezes the UA's model to the literal "K"; the real one
 // only comes from client hints, fetched once and remembered for later labels.
@@ -74,91 +75,98 @@ export function captureViewport(win: Window): Viewport {
 /**
  * The comments API at `base`. `build`, when set, scopes the lists to that
  * build (`?build=`); the server decides what an untagged comment counts as.
+ * Every failed call is reported to the API's event log (events.ts) before it
+ * throws.
  */
 export function createApi(base: string = DEFAULT_API_BASE, build?: string) {
   const root = base.replace(/\/+$/, '');
   const API = `${root}/comments`;
   const scope = build ? `?build=${encodeURIComponent(build)}` : '';
+  const JSON_HEADERS = { 'content-type': 'application/json' };
+
+  /** `fetch`, reporting a network failure or a non-2xx answer; throws `failed (status)` on the latter. */
+  async function call(failed: string, url: string, init: RequestInit = {}): Promise<Response> {
+    const kind = /upload/i.test(failed) ? 'upload' : 'fetch';
+    const context = { call: failed, method: init.method ?? 'GET', url };
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch (e) {
+      reportError(kind, e, context);
+      throw e;
+    }
+    if (res.ok) return res;
+    const body = await res.text().catch(() => '');
+    throw reportedError(kind, `${failed} failed (${res.status})`, { ...context, status: res.status, body: body.slice(0, 300) });
+  }
+
   return {
     base: root,
     build,
 
     async addReply(commentId: string, text: string, author: string): Promise<void> {
-      const res = await fetch(`${API}/${encodeURIComponent(commentId)}/replies`, {
+      await call('Saving the reply', `${API}/${encodeURIComponent(commentId)}/replies`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify({ text, author }),
       });
-      if (!res.ok) throw new Error(`Saving the reply failed (${res.status})`);
     },
 
     async deleteReply(commentId: string, replyId: string): Promise<void> {
-      const res = await fetch(
-        `${API}/${encodeURIComponent(commentId)}/replies/${encodeURIComponent(replyId)}`,
-        { method: 'DELETE' },
-      );
-      if (!res.ok) throw new Error(`Deleting the reply failed (${res.status})`);
+      await call('Deleting the reply', `${API}/${encodeURIComponent(commentId)}/replies/${encodeURIComponent(replyId)}`, {
+        method: 'DELETE',
+      });
     },
 
     async listComments(): Promise<ReviewComment[]> {
-      const res = await fetch(`${API}${scope}`);
-      if (!res.ok) throw new Error(`Loading comments failed (${res.status})`);
-      return (await res.json()) as ReviewComment[];
+      return (await (await call('Loading comments', `${API}${scope}`)).json()) as ReviewComment[];
     },
 
     /** Deleted comments, newest first — recoverable from the Deleted tab. */
     async listDeleted(): Promise<ReviewComment[]> {
-      const res = await fetch(`${root}/deleted${scope}`);
-      if (!res.ok) throw new Error(`Loading deleted comments failed (${res.status})`);
-      return (await res.json()) as ReviewComment[];
+      return (await (await call('Loading deleted comments', `${root}/deleted${scope}`)).json()) as ReviewComment[];
     },
 
     async restoreComment(id: string): Promise<void> {
-      const res = await fetch(`${API}/${encodeURIComponent(id)}/restore`, { method: 'POST' });
-      if (!res.ok) throw new Error(`Restoring the comment failed (${res.status})`);
+      await call('Restoring the comment', `${API}/${encodeURIComponent(id)}/restore`, { method: 'POST' });
     },
 
     /** Saves the comment, tagged with this build when there is one. */
     async createComment(c: ReviewComment): Promise<void> {
-      const res = await fetch(API, {
+      await call('Saving the comment', API, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify(build ? { ...c, build } : c),
       });
-      if (!res.ok) throw new Error(`Saving the comment failed (${res.status})`);
     },
 
     async patchComment(id: string, updates: Partial<ReviewComment>): Promise<void> {
-      const res = await fetch(`${API}/${encodeURIComponent(id)}`, {
+      await call('Updating the comment', `${API}/${encodeURIComponent(id)}`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify(updates),
       });
-      if (!res.ok) throw new Error(`Updating the comment failed (${res.status})`);
     },
 
     async deleteComment(id: string): Promise<void> {
-      const res = await fetch(`${API}/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(`Deleting the comment failed (${res.status})`);
+      await call('Deleting the comment', `${API}/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
 
     async uploadImage(file: File): Promise<string> {
-      const res = await fetch(`${root}/images`, {
+      const res = await call('Uploading the image', `${root}/images`, {
         method: 'POST',
         headers: { 'content-type': file.type },
         body: file,
       });
-      if (!res.ok) throw new Error(`Uploading the image failed (${res.status})`);
       return ((await res.json()) as { url: string }).url;
     },
 
     async uploadVideo(blob: Blob): Promise<string> {
-      const res = await fetch(`${root}/videos`, {
+      const res = await call('Uploading the recording', `${root}/videos`, {
         method: 'POST',
         headers: { 'content-type': blob.type || 'video/webm' },
         body: blob,
       });
-      if (!res.ok) throw new Error(`Uploading the recording failed (${res.status})`);
       return ((await res.json()) as { url: string }).url;
     },
   };

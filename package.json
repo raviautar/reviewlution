@@ -1,6 +1,6 @@
 {
   "name": "reviewlution",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Review toolbar for web apps: element-anchored comment pins, replies and a comments API for agents. A React component, a web-standard API handler and stores for a JSON file or Supabase; or a proxy that frames any app.",
   "type": "module",
   "license": "MIT",

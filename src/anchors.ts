@@ -15,6 +15,7 @@
  * with TOOLBAR_ATTR: a pin never lands on a pin, the sidebar or the dialog.
  * In the iframe shell the app's document has none of them and nothing changes.
  */
+import { reportError } from './events.js';
 
 /** Set on the toolbar's root and on every node it appends to the body. */
 export const TOOLBAR_ATTR = 'data-reviewlution';
@@ -179,7 +180,9 @@ export function findAnchored(doc: Document, anchor: Anchor): Element | null {
   let el: Element | null = null;
   try {
     el = doc.querySelector(anchor.selector);
-  } catch {
+  } catch (e) {
+    // A stored selector the browser cannot parse: a bug in buildSelector.
+    reportError('anchor', e, { selector: anchor.selector.slice(0, 300) });
     el = null;
   }
   if (el && !isToolbarNode(el) && matchesElement(el, anchor.element)) return el;

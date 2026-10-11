@@ -2,12 +2,13 @@
  * reviewlution/store/supabase: comments in a Postgres table, one row per
  * comment holding the document as it is (`data` jsonb, since PATCH may touch
  * any field), soft-deleted with a `deleted_at`; every mutation journalled to
- * an events table; attachments in a public storage bucket, which the API
- * redirects reads to. The schema is sql/supabase.sql in this package. Give it
+ * an events table; error events (the API's 4xx and 5xx, the toolbar's own
+ * failures) in a log table; attachments in a public storage bucket, which the
+ * API redirects reads to. The schema is sql/supabase.sql in this package. Give it
  * a service-role client: the tables allow nobody else.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { DEFAULT_BUILD, type DeletedComment, type ReviewComment, type Store } from '../server/store.js';
+import { DEFAULT_BUILD, type DeletedComment, type ReviewComment, type ReviewEvent, type Store } from '../server/store.js';
 
 export interface SupabaseStoreOptions {
   /** Default `review_comments`. */
@@ -16,13 +17,37 @@ export interface SupabaseStoreOptions {
   eventsTable?: string;
   /** A public bucket. Default `review`. */
   bucket?: string;
+  /** Error events. Default `review_events`. */
+  logTable?: string;
 }
 
 type Row = { data: ReviewComment; deleted_at?: string | null };
+type EventRow = {
+  id: number;
+  at: string;
+  source: ReviewEvent['source'];
+  kind: string;
+  message: string;
+  route: string | null;
+  method: string | null;
+  status: number | null;
+  stack: string | null;
+  url: string | null;
+  build: string | null;
+  author: string | null;
+  viewport: ReviewEvent['viewport'] | null;
+  user_agent: string | null;
+  context: Record<string, unknown> | null;
+};
 
 export function supabaseStore(
   client: SupabaseClient,
-  { table = 'review_comments', eventsTable = 'review_comment_events', bucket = 'review' }: SupabaseStoreOptions = {},
+  {
+    table = 'review_comments',
+    eventsTable = 'review_comment_events',
+    bucket = 'review',
+    logTable = 'review_events',
+  }: SupabaseStoreOptions = {},
 ): Store {
   // Production's rows: tagged with the default build, or from before comments were tagged.
   const defaultRows = `data->>build.is.null,data->>build.eq.${DEFAULT_BUILD}`;
@@ -106,6 +131,50 @@ export function supabaseStore(
     async journal(op, payload) {
       const { error } = await client.from(eventsTable).insert({ op, payload });
       if (error) throw new Error(`journal failed: ${error.message}`);
+    },
+
+    async logEvent(e) {
+      const { error } = await client.from(logTable).insert({
+        at: e.at,
+        source: e.source,
+        kind: e.kind,
+        message: e.message,
+        route: e.route ?? null,
+        method: e.method ?? null,
+        status: e.status ?? null,
+        stack: e.stack ?? null,
+        url: e.url ?? null,
+        build: e.build ?? null,
+        author: e.author ?? null,
+        viewport: e.viewport ?? null,
+        user_agent: e.userAgent ?? null,
+        context: e.context ?? null,
+      });
+      if (error) throw new Error(`event log failed: ${error.message}`);
+    },
+
+    async listEvents({ limit }) {
+      const { data, error } = await client.from(logTable).select('*').order('at', { ascending: false }).limit(limit);
+      if (error) throw new Error(`events read failed: ${error.message}`);
+      return ((data as EventRow[] | null) ?? []).map(
+        (r): ReviewEvent => ({
+          id: r.id,
+          at: r.at,
+          source: r.source,
+          kind: r.kind,
+          message: r.message,
+          route: r.route ?? undefined,
+          method: r.method ?? undefined,
+          status: r.status ?? undefined,
+          stack: r.stack ?? undefined,
+          url: r.url ?? undefined,
+          build: r.build ?? undefined,
+          author: r.author ?? undefined,
+          viewport: r.viewport ?? undefined,
+          userAgent: r.user_agent ?? undefined,
+          context: r.context ?? undefined,
+        }),
+      );
     },
   };
 }

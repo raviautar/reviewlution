@@ -10,10 +10,16 @@
  * one prefix (a rewrite). The first is the public one: attachment URLs it
  * hands out start with it.
  */
-import type { FileKind, ReviewComment, Store } from './store.js';
+import type { FileKind, ReviewComment, ReviewEvent, Store } from './store.js';
 
 export interface ReviewHandlerOptions {
   store: Store;
+  /**
+   * Called with every error event, next to `store.logEvent`: each 4xx or 5xx
+   * the API returns, each error it throws, each failure the toolbar reports.
+   * Anything it throws is swallowed.
+   */
+  onEvent?: (event: ReviewEvent) => void | Promise<void>;
   /** The prefix the API is served under. Default `/__review/api`. */
   basePath?: string | string[];
   /** The largest screen recording accepted. Default 250 MB. */
@@ -43,6 +49,42 @@ const NAME_RE: Record<FileKind, RegExp> = {
 };
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 const MB = 1024 * 1024;
+/** The largest event the toolbar may report, and how many it may report a minute (per handler). */
+const MAX_EVENT_BYTES = 16 * 1024;
+const CLIENT_EVENTS_PER_MINUTE = 120;
+/** How long a response waits on the event log before it goes anyway. */
+const LOG_TIMEOUT_MS = 3000;
+
+const clip = (v: unknown, n: number): string | undefined => (typeof v === 'string' && v ? v.slice(0, n) : undefined);
+const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+
+/** A failure the toolbar reported, trimmed to the fields and sizes the log keeps; null without a message. */
+function clientEvent(body: Record<string, unknown>, req: Request): ReviewEvent | null {
+  const message = clip(body.message, 1000);
+  if (!message) return null;
+  const vp = body.viewport as Record<string, unknown> | null | undefined;
+  const w = num(vp?.w);
+  const h = num(vp?.h);
+  let context: Record<string, unknown> | undefined;
+  if (body.context && typeof body.context === 'object' && !Array.isArray(body.context)) {
+    const s = JSON.stringify(body.context);
+    context = s.length <= 4000 ? (body.context as Record<string, unknown>) : { truncated: s.slice(0, 4000) };
+  }
+  return {
+    at: new Date().toISOString(),
+    source: 'client',
+    kind: clip(body.kind, 40) ?? 'toolbar',
+    message,
+    route: clip(body.route, 500),
+    url: clip(body.url, 2000),
+    build: clip(body.build, 100),
+    author: clip(body.author, 200),
+    viewport: w !== undefined && h !== undefined ? { w, h, dpr: num(vp?.dpr), device: clip(vp?.device, 100) } : undefined,
+    userAgent: clip(body.userAgent, 500) ?? clip(req.headers.get('user-agent'), 500),
+    stack: clip(body.stack, 8000),
+    context,
+  };
+}
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const notFound = () => json({ error: 'not found' }, 404);
@@ -69,6 +111,7 @@ export function createReviewHandler({
   basePath = '/__review/api',
   maxVideoBytes = 250 * MB,
   maxImageBytes = 15 * MB,
+  onEvent,
 }: ReviewHandlerOptions): ReviewHandler {
   const bases = (Array.isArray(basePath) ? basePath : [basePath]).map((b) => b.replace(/\/+$/, ''));
   const publicBase = bases[0] ?? '';
@@ -85,6 +128,56 @@ export function createReviewHandler({
   const journal = async (op: string, payload: unknown) => {
     await store.journal?.(op, payload);
   };
+
+  /** Hands an event to the store and to onEvent. Never throws, and never holds a response up for long. */
+  const record = async (event: ReviewEvent) => {
+    const jobs: Promise<unknown>[] = [];
+    for (const sink of [store.logEvent?.bind(store), onEvent]) {
+      if (!sink) continue;
+      try {
+        jobs.push(Promise.resolve(sink(event)).catch(() => {}));
+      } catch {
+        /* a broken log must not break the API */
+      }
+    }
+    if (!jobs.length) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([Promise.all(jobs), new Promise((r) => (timer = setTimeout(r, LOG_TIMEOUT_MS)))]);
+    clearTimeout(timer);
+  };
+
+  // Responses the handler does not log: refusals of a flood of client events.
+  const unlogged = new WeakSet<Response>();
+  let windowStart = 0;
+  let windowCount = 0;
+  const clientFlood = () => {
+    const now = Date.now();
+    if (now - windowStart > 60_000) {
+      windowStart = now;
+      windowCount = 0;
+    }
+    return ++windowCount > CLIENT_EVENTS_PER_MINUTE;
+  };
+
+  async function postEvent(req: Request): Promise<Response> {
+    if (clientFlood()) {
+      const res = json({ error: 'too many events' }, 429);
+      unlogged.add(res);
+      return res;
+    }
+    const text = await req.text();
+    if (text.length > MAX_EVENT_BYTES) return json({ error: `event over ${MAX_EVENT_BYTES / 1024} KB` }, 413);
+    let body: unknown = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      /* answered below */
+    }
+    const event = body && typeof body === 'object' && !Array.isArray(body) ? clientEvent(body as Record<string, unknown>, req) : null;
+    if (!event) return json({ error: 'message is required' }, 400);
+    await record(event);
+    return noContent();
+  }
 
   async function upload(req: Request, kind: FileKind): Promise<Response> {
     const type = (req.headers.get('content-type') ?? '').split(';')[0].trim();
@@ -140,6 +233,16 @@ export function createReviewHandler({
 
     if (head === 'deleted' && parts.length === 1 && method === 'GET') {
       return json(await store.listDeleted({ build: url.searchParams.get('build') || undefined }));
+    }
+
+    if (head === 'events' && parts.length === 1) {
+      if (method === 'POST') return postEvent(req);
+      if (method === 'GET') {
+        if (!store.listEvents) return json({ error: 'this store keeps no events' }, 404);
+        const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('limit'))) || 100, 1), 500);
+        return json(await store.listEvents({ limit }));
+      }
+      return notFound();
     }
 
     if (head === 'images' || head === 'videos') {
@@ -235,12 +338,42 @@ export function createReviewHandler({
     return notFound();
   }
 
+  /** A server event for `req`: the API path and query it asked for, how it was answered. */
+  const serverEvent = (req: Request, status: number, message: string, stack?: string): ReviewEvent => {
+    const url = new URL(req.url);
+    return {
+      at: new Date().toISOString(),
+      source: 'server',
+      kind: stack ? 'exception' : 'http',
+      message,
+      route: `${apiPath(url) ?? url.pathname}${url.search}`.slice(0, 500),
+      method: req.method.toUpperCase(),
+      status,
+      stack: stack?.slice(0, 8000),
+      userAgent: clip(req.headers.get('user-agent'), 500),
+    };
+  };
+
+  // Every 4xx and 5xx is logged with its error message, every thrown error
+  // with its stack too, so a reviewer's failed save can be traced afterwards.
   const handle: ReviewRequestHandler = async (req) => {
+    let res: Response;
     try {
-      return await route(req);
+      res = await route(req);
     } catch (e) {
-      return json({ error: e instanceof Error ? e.message : 'internal error' }, 500);
+      const message = e instanceof Error ? e.message : 'internal error';
+      await record(serverEvent(req, 500, message, e instanceof Error ? (e.stack ?? message) : String(e)));
+      return json({ error: message }, 500);
     }
+    if (res.status >= 400 && !unlogged.has(res)) {
+      let message = `HTTP ${res.status}`;
+      if (/json/.test(res.headers.get('content-type') ?? '')) {
+        const body = (await res.clone().json().catch(() => null)) as { error?: unknown } | null;
+        if (typeof body?.error === 'string') message = body.error;
+      }
+      await record(serverEvent(req, res.status, message));
+    }
+    return res;
   };
   return { GET: handle, POST: handle, PATCH: handle, DELETE: handle, handle };
 }

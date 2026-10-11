@@ -8,6 +8,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useApi } from './api.js';
+import { reportError } from './events.js';
 import { TOOLBAR_ATTR } from './anchors.js';
 import { useHost } from './host.js';
 import { CameraIcon } from './icons.js';
@@ -63,7 +64,8 @@ export function SnapButton({
       const blob = await cap.grab();
       const file = new File([blob], 'capture.png', { type: 'image/png' });
       onDone(await uploadImage(file));
-    } catch {
+    } catch (e) {
+      reportError('capture', e, { during: 'save area capture' });
       setError('Saving the capture failed.');
     } finally {
       setArea(null);
@@ -99,7 +101,8 @@ export function SnapButton({
         const blob = await capturePage(host.win());
         const file = new File([blob], 'capture.png', { type: 'image/png' });
         onDone(await uploadImage(file));
-      } catch {
+      } catch (e) {
+        reportError('capture', e, { during: 'capture page' });
         setError('Could not capture the page.');
       } finally {
         setPhase('idle');
@@ -120,6 +123,7 @@ export function SnapButton({
       setLeft(COUNTDOWN);
       setPhase('countdown');
     } catch (e) {
+      if (!(e instanceof Error && e.name === 'NotAllowedError')) reportError('capture', e, { during: 'start screen capture' });
       setError(
         e instanceof Error && e.name === 'NotAllowedError'
           ? 'Screen capture was cancelled.'

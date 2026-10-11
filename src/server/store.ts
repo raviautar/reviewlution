@@ -31,6 +31,36 @@ export interface StoredFile {
 
 export type RestoreResult = { status: 'restored'; comment: ReviewComment } | { status: 'present' | 'missing' };
 
+/**
+ * Something that went wrong, kept so it can be debugged later: a 4xx or 5xx
+ * the API returned or an error it threw (`source: 'server'`), or a failure the
+ * toolbar reported from the browser (`source: 'client'`, POST /events).
+ */
+export interface ReviewEvent {
+  /** Set by the store when it reads events back. */
+  id?: string | number;
+  /** ISO time; the handler stamps it. */
+  at: string;
+  source: 'server' | 'client';
+  /** `http` (a 4xx or 5xx) and `exception` (thrown) on the server; `fetch`, `upload`, `record`, `capture`, `anchor`, `crash`, `toolbar` from the toolbar. */
+  kind: string;
+  message: string;
+  /** Server: the API path and query. Client: the app route the reviewer was on. */
+  route?: string;
+  method?: string;
+  status?: number;
+  /** Server: only for a 5xx. */
+  stack?: string;
+  /** The page URL the toolbar was on. */
+  url?: string;
+  build?: string;
+  author?: string;
+  viewport?: { w: number; h: number; dpr?: number; device?: string };
+  userAgent?: string;
+  /** A small object of whatever helps (the API call, a selector, a phase). */
+  context?: Record<string, unknown>;
+}
+
 export interface Store {
   /** Live comments, oldest first. */
   list(filter: CommentFilter): Promise<ReviewComment[]>;
@@ -55,6 +85,10 @@ export interface Store {
   getFile?(kind: FileKind, name: string): Promise<StoredFile | null>;
   /** Append-only record of every mutation, called after it is stored. */
   journal?(op: string, payload: unknown): Promise<void>;
+  /** Keep an error event. Optional; the handler swallows anything it throws, so logging never breaks the API. */
+  logEvent?(event: ReviewEvent): Promise<void>;
+  /** The most recent events, newest first (GET /events). */
+  listEvents?(opts: { limit: number }): Promise<ReviewEvent[]>;
 }
 
 /** Whether `c` belongs to `build`, for stores that filter in memory. */

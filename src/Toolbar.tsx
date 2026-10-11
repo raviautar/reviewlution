@@ -9,7 +9,7 @@
  * whose element is not on the current DOM simply has no dot — its comment
  * stays in the sidebar, which always lists every page's comments.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect, type ErrorInfo, type ReactNode } from 'react';
 import {
   ACCENT,
   ApiContext,
@@ -35,6 +35,7 @@ import {
   type Anchor,
   type Box,
 } from './anchors.js';
+import { reportError, setReporter, type EventKind } from './events.js';
 import { HostContext, useHost, type Host } from './host.js';
 import { RecordButton } from './RecordButton.js';
 import { SnapButton } from './SnapButton.js';
@@ -54,6 +55,17 @@ type Pending = {
 };
 
 const EMPTY_DRAFT: Draft = { text: '', images: [], videos: [] };
+
+/** A handler of the toolbar's own whose throw is reported (events.ts) instead of escaping to the page. */
+function guarded<A extends unknown[]>(kind: EventKind, fn: (...args: A) => void): (...args: A) => void {
+  return (...args) => {
+    try {
+      fn(...args);
+    } catch (e) {
+      reportError(kind, e);
+    }
+  };
+}
 const FONT = "'Hanken Grotesk', system-ui, -apple-system, sans-serif";
 /**
  * Hover colours for the borderless attachment buttons, and the browser
@@ -241,6 +253,14 @@ function PinLayer({
     let raf = 0;
     const tick = () => {
       raf = requestAnimationFrame(tick);
+      try {
+        place();
+      } catch (e) {
+        // Every frame would throw again; the reporter sends it once a minute.
+        reportError('anchor', e, { during: 'pin placement' });
+      }
+    };
+    const place = () => {
       const doc = host.doc();
       if (!doc) return;
       const next: PinPos[] = [];
@@ -368,7 +388,7 @@ function PinLayer({
     hoverEl.current = el && el.tagName !== 'HTML' && el.tagName !== 'BODY' ? el : null;
     setDrag({ id, x: e.clientX, y: e.clientY });
   };
-  const pinPointerUp = (e: React.PointerEvent, id: string) => {
+  const pinPointerUp = guarded('anchor', (e: React.PointerEvent, id: string) => {
     const d = dragRef.current;
     dragRef.current = null;
     if (!d || !d.moved) return;
@@ -384,7 +404,7 @@ function PinLayer({
       y: (e.clientY / window.innerHeight) * 100,
       page: route,
     });
-  };
+  });
 
   const track = (e: React.MouseEvent) => {
     const doc = host.doc();
@@ -437,7 +457,7 @@ function PinLayer({
       height: Math.abs(e.clientY - b.y),
     });
   };
-  const bandUp = (e: React.PointerEvent) => {
+  const bandUp = guarded('anchor', (e: React.PointerEvent) => {
     const b = bandRef.current;
     bandRef.current = null;
     const doc = host.doc();
@@ -486,7 +506,7 @@ function PinLayer({
     }
     cache.current.delete('__pending');
     onPlace({ anchor: a, anchors: a ? [a] : [], ...at });
-  };
+  });
 
   return (
     <div
@@ -908,6 +928,7 @@ function CreateDialog({
         const url = await uploadImage(f);
         onDraft({ ...draft, images: [...draft.images, url] });
       } catch (e) {
+        reportError('upload', e, { during: 'attach image' });
         setError(e instanceof Error ? e.message : 'Image upload failed');
       } finally {
         setBusy(false);
@@ -922,6 +943,7 @@ function CreateDialog({
     try {
       await onSubmit();
     } catch (e) {
+      reportError('toolbar', e, { during: 'save comment' });
       setError(e instanceof Error ? e.message : 'Saving failed');
     } finally {
       setBusy(false);
@@ -1906,7 +1928,8 @@ function CardBody({
       try {
         const url = await uploadImage(f);
         setImages((cur) => [...cur, url]);
-      } catch {
+      } catch (e) {
+        reportError('upload', e, { during: 'attach image to edit' });
         /* keep editing; the image just didn't attach */
       }
     }
@@ -2482,13 +2505,61 @@ export interface ToolbarProps {
   title?: string;
 }
 
+/**
+ * A crash in the toolbar's own rendering takes only the toolbar down, never
+ * the app under review, and is reported (events.ts).
+ */
+class ToolbarBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    // After this commit, so a crash on the first render finds the reporter set.
+    setTimeout(() => reportError('crash', error, { componentStack: info.componentStack?.slice(0, 1200) }), 0);
+  }
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
 /** The toolbar over `host`, talking to the API at `apiBase`. */
 export function Toolbar({ host, apiBase, build, ...rest }: ToolbarProps) {
   const api = useMemo(() => createApi(apiBase, build), [apiBase, build]);
+  const routeRef = useRef(rest.route);
+  routeRef.current = rest.route;
+  // Before any child's effect runs, so the first poll's failure is reported too.
+  useLayoutEffect(
+    () =>
+      setReporter({
+        base: api.base,
+        build,
+        route: () => routeRef.current,
+        author: storedName,
+        url: () => {
+          try {
+            return host.win()?.location.href ?? location.href;
+          } catch {
+            return location.href;
+          }
+        },
+        viewport: () => {
+          try {
+            const win = host.win();
+            return win ? captureViewport(win) : null;
+          } catch {
+            return null;
+          }
+        },
+      }),
+    [api, build, host],
+  );
   return (
     <HostContext.Provider value={host}>
       <ApiContext.Provider value={api}>
-        <ToolbarBody host={host} {...rest} />
+        <ToolbarBoundary>
+          <ToolbarBody host={host} {...rest} />
+        </ToolbarBoundary>
       </ApiContext.Provider>
     </HostContext.Provider>
   );
@@ -2549,7 +2620,8 @@ function ToolbarBody({
       lastPayload.current = payload;
       setComments(next);
       setDeleted(gone);
-    } catch {
+    } catch (e) {
+      reportError('fetch', e, { during: 'refresh' });
       /* transient — the next poll or mutation refreshes again */
     }
   }, [listComments, listDeleted, defaultRoute]);

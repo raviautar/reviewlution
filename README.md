@@ -86,15 +86,16 @@ The toolbar draws into the app's own document, above everything else (z-index ne
 | `basePath` | `/__review/api` | The prefix the API is served under; the handler reads the path after it. An array when a rewrite makes it reachable under more than one; the first is the public one, used in attachment URLs. |
 | `maxVideoBytes` | 250 MB | Largest recording accepted (413 above it). Serverless hosts cap request bodies lower (Vercel: 4.5 MB). |
 | `maxImageBytes` | 15 MB | Largest image accepted. |
+| `onEvent` | none | Called with every error event (see "Error log"), next to the store's `logEvent`. What it throws is swallowed. |
 
 Attachments are served by the store: a store with `fileUrl` (Supabase's public bucket) gets a 302 there; one with `getFile` is streamed by the handler, with range requests for video seeking.
 
 ## Stores
 
-A `Store` (exported as a type from `reviewlution/server`) reads and writes whole comment documents and files; the handler keeps the API's rules. Methods: `list({ page, build })`, `get`, `create` (→ `'created' | 'duplicate'`), `update`, `softDelete`, `listDeleted({ build })`, `restore` (→ `restored | present | missing`), `putFile`, and `fileUrl` or `getFile`; optional `count` and `journal(op, payload)`, an append-only record of every mutation.
+A `Store` (exported as a type from `reviewlution/server`) reads and writes whole comment documents and files; the handler keeps the API's rules. Methods: `list({ page, build })`, `get`, `create` (→ `'created' | 'duplicate'`), `update`, `softDelete`, `listDeleted({ build })`, `restore` (→ `restored | present | missing`), `putFile`, and `fileUrl` or `getFile`; optional `count`, `journal(op, payload)`, an append-only record of every mutation, and `logEvent(event)` / `listEvents({ limit })` for the error log.
 
-- **`fileStore(file, { deletedCap? })`** from `reviewlution/store/file`: comments in `file`, deleted ones in `<name>.deleted.json` (newest 500 kept), images and videos in folders next to it, the journal in `<file>l` (JSON lines). Writes go one at a time, each to a temp file renamed over the old one. One process per file.
-- **`supabaseStore(client, { table?, eventsTable?, bucket? })`** from `reviewlution/store/supabase`: one row per comment (`data` jsonb, `deleted_at` for soft deletes), a journal table, a public bucket. Defaults `review_comments`, `review_comment_events`, `review`; the schema is `sql/supabase.sql` (also exported as `reviewlution/sql/supabase.sql`). Pass a service-role client; row level security is on with no policies, so nobody else reads.
+- **`fileStore(file, { deletedCap? })`** from `reviewlution/store/file`: comments in `file`, deleted ones in `<name>.deleted.json` (newest 500 kept), images and videos in folders next to it, the journal in `<file>l` (JSON lines), error events in `<name>.events.jsonl`. Writes go one at a time, each to a temp file renamed over the old one. One process per file.
+- **`supabaseStore(client, { table?, eventsTable?, bucket?, logTable? })`** from `reviewlution/store/supabase`: one row per comment (`data` jsonb, `deleted_at` for soft deletes), a journal table, a public bucket, an error log table. Defaults `review_comments`, `review_comment_events`, `review`, `review_events`; the schema is `sql/supabase.sql` (also exported as `reviewlution/sql/supabase.sql`). Pass a service-role client; row level security is on with no policies, so nobody else reads.
 
 ## API for agents
 
@@ -107,10 +108,17 @@ All under `/__review/api` (or the app's `basePath`):
 - `POST /images` (raw image body) → `{url}`; `GET /images/:name`.
 - `POST /videos` (raw webm/mp4 body, up to `maxVideoBytes`) → `{url}`; `GET /videos/:name` (range requests supported). Comments list them under `videos`.
 - `GET /healthz` → `{ok, comments}`.
+- `POST /events` (the toolbar's failure reports, see below; 204), `GET /events?limit=100` (newest first, up to 500).
 
 The working rule: an agent that fixes what a comment flags PATCHes it `{"resolved": true}` (or replies in-thread); a person can reopen it.
 
 The toolbar uses exactly these routes; an app that serves its own API instead of the handler must answer them with the same payloads and status codes.
+
+## Error log
+
+So a reviewer's problem can be debugged after the fact, the handler logs every 4xx and 5xx it returns (`source: 'server'`, `kind: 'http'`: method, API route and query, status, the error message) and every error it throws (`kind: 'exception'`, with the stack). The toolbar reports its own failures to `POST /events` (`source: 'client'`): failed API calls and uploads (`fetch`, `upload`), capture and recording errors (`capture`, `record`), anchor errors (`anchor`) and crashes of its own rendering (`crash`, which unmounts only the toolbar), each with the page URL, route, build, author, viewport, user agent, message, stack and a small `context`. Never the host page's errors. The client sends the same failure at most once a minute, ten a minute and fifty a page load in all; the handler refuses more than 120 client events a minute with a 429 that is not itself logged, and events over 16 KB with a 413.
+
+Events go to `store.logEvent` and `onEvent`; a failing log is swallowed and holds a response up for at most 3 s. Read them back with `GET /events?limit=`, behind whatever guards the rest of the API, or in Supabase: `select * from review_events order by at desc limit 50`.
 
 Capture and recording use the browser's tab capture (`getDisplayMedia` with the current tab preferred), so they work in Chromium browsers; Safari falls back to whole-window captures.
 

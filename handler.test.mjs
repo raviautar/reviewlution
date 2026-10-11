@@ -90,6 +90,13 @@ async function walk(send) {
   r = await call('/healthz');
   assert.deepEqual(r.body, { ok: true, comments: 2 });
   assert.equal((await call('/nothing')).status, 404);
+
+  assert.equal((await post('/events', { kind: 'fetch', message: 'Loading comments failed (502)' })).status, 204);
+  r = await call('/events?limit=2');
+  assert.deepEqual(r.body.map((e) => [e.source, e.message]), [
+    ['client', 'Loading comments failed (502)'],
+    ['server', 'not found'],
+  ]);
 }
 
 let dir;
@@ -139,4 +146,99 @@ test('the iframe shell server serves the same API through Fastify', async () => 
   } finally {
     server.kill();
   }
+});
+
+test('every 4xx and 5xx is logged, and the toolbar reports its own failures', async () => {
+  const file = join(dir, 'events', 'comments.json');
+  const seen = [];
+  const api = createReviewHandler({ store: fileStore(file), onEvent: (e) => seen.push(e) });
+  const send = (path, init) => api.handle(new Request(`http://test/__review/api${path}`, init));
+  const report = (body, headers = {}) =>
+    send('/events', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+
+  assert.equal((await send('/comments', { method: 'POST', body: '{}' })).status, 400);
+  assert.equal((await send('/nothing?x=1')).status, 404);
+  const sent = {
+    kind: 'upload',
+    message: 'Uploading the image failed (500)',
+    route: '/home',
+    url: 'https://app.test/home',
+    build: 'pr-7',
+    author: 'Ravi',
+    viewport: { w: 390, h: 844, dpr: 3, device: 'iPhone' },
+    stack: 'Error: Uploading the image failed (500)\n    at call',
+    context: { call: 'Uploading the image', status: 500 },
+  };
+  assert.equal((await report(sent, { 'user-agent': 'test-agent' })).status, 204);
+  assert.equal((await report({ kind: 'fetch' })).status, 400);
+  assert.equal((await report({ message: 'x'.repeat(20_000) })).status, 413);
+
+  const r = await send('/events?limit=10');
+  assert.equal(r.status, 200);
+  const events = await r.json();
+  // Newest first; the client's own report is the only client event.
+  assert.deepEqual(
+    events.map((e) => [e.source, e.kind, e.status ?? null]),
+    [
+      ['server', 'http', 413],
+      ['server', 'http', 400],
+      ['client', 'upload', null],
+      ['server', 'http', 404],
+      ['server', 'http', 400],
+    ],
+  );
+  const client = events.find((e) => e.source === 'client');
+  for (const k of ['message', 'route', 'url', 'build', 'author', 'viewport', 'stack', 'context']) assert.deepEqual(client[k], sent[k]);
+  assert.equal(client.userAgent, 'test-agent');
+  assert.equal(typeof client.at, 'string');
+  const missing = events.at(-2);
+  assert.equal(missing.route, '/nothing?x=1');
+  assert.equal(missing.method, 'GET');
+  assert.equal(missing.message, 'not found');
+  assert.equal(events.at(-1).message, 'id, text, x and y are required');
+  assert.equal(missing.stack, undefined);
+  assert.equal(seen.length, 5);
+  assert.equal((await (await send('/events?limit=2')).json()).length, 2);
+  assert.equal((await readFile(join(dir, 'events', 'comments.events.jsonl'), 'utf8')).trim().split('\n').length, 5);
+});
+
+test('a thrown error is logged with its stack, and a failing log never breaks the API', async () => {
+  const seen = [];
+  const store = {
+    ...fileStore(join(dir, 'boom', 'comments.json')),
+    list: async () => {
+      throw new Error('db down');
+    },
+    logEvent: async () => {
+      throw new Error('log down');
+    },
+  };
+  const api = createReviewHandler({
+    store,
+    onEvent: (e) => {
+      seen.push(e);
+      throw new Error('callback down');
+    },
+  });
+  const r = await api.GET(new Request('http://test/__review/api/comments?build=pr-7'));
+  assert.equal(r.status, 500);
+  assert.deepEqual(await r.json(), { error: 'db down' });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].kind, 'exception');
+  assert.equal(seen[0].route, '/comments?build=pr-7');
+  assert.equal(seen[0].status, 500);
+  assert.match(seen[0].stack, /db down/);
+  const ok = await api.POST(new Request('http://test/__review/api/events', { method: 'POST', body: JSON.stringify({ message: 'm' }) }));
+  assert.equal(ok.status, 204);
+});
+
+test('a flood of client events is refused without being logged; a store with no log has no GET /events', async () => {
+  const seen = [];
+  const { listEvents: _l, logEvent: _w, ...plain } = fileStore(join(dir, 'flood', 'comments.json'));
+  const api = createReviewHandler({ store: plain, onEvent: (e) => seen.push(e) });
+  const post = () => api.POST(new Request('http://test/__review/api/events', { method: 'POST', body: JSON.stringify({ message: 'loop' }) }));
+  for (let i = 0; i < 120; i++) assert.equal((await post()).status, 204);
+  assert.equal((await post()).status, 429);
+  assert.equal(seen.length, 120);
+  assert.equal((await api.GET(new Request('http://test/__review/api/events'))).status, 404);
 });

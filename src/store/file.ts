@@ -3,13 +3,15 @@
  * second (`<name>.deleted.json`), attachments in `images/` and `videos/` next
  * to it, and every mutation appended to `<file>l` (a .jsonl journal), so a
  * clobbered state file can be rebuilt and any loss traced to its request.
+ * Error events (the API's 4xx and 5xx, the toolbar's own failures) go to
+ * `<name>.events.jsonl`, one per line.
  * Writes go one at a time, each to a temp file renamed over the old one.
  */
 import { createReadStream } from 'node:fs';
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
-import { inBuild, type DeletedComment, type FileKind, type ReviewComment, type Store } from '../server/store.js';
+import { inBuild, type DeletedComment, type FileKind, type ReviewComment, type ReviewEvent, type Store } from '../server/store.js';
 
 export interface FileStoreOptions {
   /** How many deleted comments are kept, newest first. Default 500. */
@@ -28,6 +30,7 @@ async function readList<T>(file: string): Promise<T[]> {
 /** A Store on the local disk, rooted at `file` (e.g. `./comments.json`). */
 export function fileStore(file: string, { deletedCap = 500 }: FileStoreOptions = {}): Store & { file: string } {
   const deletedFile = `${file.replace(/\.json$/, '')}.deleted.json`;
+  const eventsFile = `${file.replace(/\.json$/, '')}.events.jsonl`;
   const dirOf = (kind: FileKind) => join(dirname(file), kind);
   let state: Promise<{ comments: ReviewComment[]; deleted: DeletedComment[] }> | null = null;
   const load = () =>
@@ -131,6 +134,33 @@ export function fileStore(file: string, { deletedCap = 500 }: FileStoreOptions =
         await mkdir(dirname(file), { recursive: true });
         await appendFile(`${file}l`, `${line}\n`);
       });
+    },
+
+    logEvent(event) {
+      const line = JSON.stringify(event);
+      return queue(async () => {
+        await mkdir(dirname(file), { recursive: true });
+        await appendFile(eventsFile, `${line}\n`);
+      });
+    },
+
+    async listEvents({ limit }) {
+      let text = '';
+      try {
+        text = await readFile(eventsFile, 'utf8');
+      } catch {
+        return [];
+      }
+      const lines = text.split('\n').filter(Boolean);
+      const out: ReviewEvent[] = [];
+      for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+        try {
+          out.push({ id: i + 1, ...(JSON.parse(lines[i]) as ReviewEvent) });
+        } catch {
+          /* a torn line */
+        }
+      }
+      return out;
     },
   };
 }

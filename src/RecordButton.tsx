@@ -7,6 +7,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useApi } from './api.js';
+import { reportError } from './events.js';
 import { TOOLBAR_ATTR } from './anchors.js';
 import { RecordIcon, StopIcon } from './icons.js';
 import { HIGHLIGHT, type Recording, type Rect, selectRegion, startRecording } from './recorder.js';
@@ -62,7 +63,8 @@ export function RecordButton({
       const blob = await r.stop();
       if (blob.size === 0) throw new Error('empty');
       onDone(await uploadVideo(blob));
-    } catch {
+    } catch (e) {
+      reportError('record', e, { during: 'save recording' });
       setError('Saving the recording failed.');
     } finally {
       setArea(null);
@@ -86,6 +88,7 @@ export function RecordButton({
       setElapsed(0);
       setPhase('recording');
     } catch (e) {
+      if (!(e instanceof Error && e.name === 'NotAllowedError')) reportError('record', e, { during: 'start recording' });
       setError(
         e instanceof Error && e.name === 'NotAllowedError'
           ? 'Screen capture was cancelled.'
