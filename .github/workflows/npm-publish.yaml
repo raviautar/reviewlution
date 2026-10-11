@@ -1,0 +1,79 @@
+name: Publish to npm
+
+# A merge to main that changes the package publishes it, when package.json
+# carries a version npm does not have yet. Auth is npm Trusted Publishing
+# (OIDC): no token secret; npmjs.com trusts this workflow file in this repo
+# (README, "Releasing"). On pull requests, version-check fails a change to src/
+# that forgot to bump the version.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+      - src/**
+      - sql/**
+      - vite.lib.config.ts
+      - tsconfig*
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: npm with trusted publishing (>= 11.5.1)
+        run: |
+          if [ "$(printf '%s\n' 11.5.1 "$(npm -v)" | sort -V | head -1)" != 11.5.1 ]; then npm install -g npm@latest; fi
+          npm -v
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:lib
+      - name: Publish when the version is new
+        run: |
+          local_version=$(node -p "require('./package.json').version")
+          # A 404 (never published) reads as "none".
+          published=$(npm view reviewlution version 2>/dev/null || echo none)
+          if [ "$local_version" = "$published" ]; then
+            echo "reviewlution $local_version is already on npm; nothing to publish." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            npm publish --access public --provenance
+            echo "Published reviewlution $local_version (npm had $published)." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  version-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: A change to src/ bumps the version
+        run: |
+          base="origin/${{ github.base_ref }}"
+          head_version=$(node -p "require('./package.json').version")
+          base_version=$(git show "$base:package.json" | node -p "const p = JSON.parse(require('fs').readFileSync(0, 'utf8')); p.private || p.name !== 'reviewlution' ? '' : p.version")
+          if [ -z "$base_version" ]; then
+            echo "main does not hold the published package yet; nothing to compare."
+          elif git diff --quiet "$base"...HEAD -- src; then
+            echo "No change to src/; version $head_version is fine."
+          elif [ "$head_version" = "$base_version" ]; then
+            echo "::error file=package.json::src/ changed but the version is still $base_version, as on main: bump the version in package.json (semver) so the merge publishes."
+            exit 1
+          else
+            echo "Version $base_version -> $head_version."
+          fi

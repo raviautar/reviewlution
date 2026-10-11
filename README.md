@@ -180,3 +180,10 @@ npm run dev         # the shell, with Vite
 npm run build:lib   # the package: dist-lib/ (ES modules and types)
 npm test            # builds the package, then the handler, server and hub tests
 ```
+
+## Releasing
+
+1. Bump `version` in `package.json` (semver: a fix is a patch, a new prop or option a minor, a breaking change a major). A pull request that changes `src/` without a bump fails the `version-check` job.
+2. Merge to `main`. `.github/workflows/npm-publish.yaml` tests, builds and publishes the new version with provenance; when npm already has that version it does nothing.
+
+The workflow authenticates with npm Trusted Publishing (OIDC), so there is no npm token in the repo and the two-factor prompt does not apply to CI. One-time setup on npmjs.com, possible only once the package exists (after the first manual `npm publish`): the `reviewlution` package → **Settings** → **Trusted Publisher** → **GitHub Actions**, organization or user `raviautar`, repository `reviewlution`, workflow filename `npm-publish.yaml`, environment left blank.
