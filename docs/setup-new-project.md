@@ -13,15 +13,16 @@ It takes about an hour. Every step below is required unless it says "optional".
 
 - A Next.js App Router project, deployed by Vercel's Git integration (production from `main`, a preview for every other branch).
 - A domain whose DNS you control, for the review subdomain.
-- The `reviewlution` package. Until it is on npm, build it from this repo and keep the tarball in your project:
+- The `reviewlution` package, 0.1.2 or later (for the C shortcut). Until it is on npm, take the tarball from the latest [GitHub release](https://github.com/raviautar/reviewlution/releases) and keep it in your project:
 
   ```bash
-  # in a checkout of this repo, on the `component` branch (the React toolbar and the server handler)
-  npm ci && npm pack            # writes reviewlution-<version>.tgz
-  # in your project
-  mkdir -p vendor && cp <path-to>/reviewlution-<version>.tgz vendor/
-  npm install file:vendor/reviewlution-<version>.tgz @vercel/blob
+  mkdir -p vendor
+  curl -L -o vendor/reviewlution-0.1.2.tgz \
+    https://github.com/raviautar/reviewlution/releases/download/v0.1.2/reviewlution-0.1.2.tgz
+  npm install file:vendor/reviewlution-0.1.2.tgz @vercel/blob
   ```
+
+  To build one yourself instead: `npm ci && npm pack` in a checkout of the `component` branch. To upgrade, swap the file in `vendor/` and run the install again.
 
 ## The files you add
 
@@ -522,7 +523,9 @@ The same thing through the API is `POST /v10/projects/<project>/domains` with `{
 
 - **Production:** the page source has no `reviewlution` or `__review` in it, and `https://example.com/__review/api/comments` answers 404.
 - **A preview** (open any branch's preview URL, or `review.example.com`): the code page. With no `REVIEW_CODE` set it says the review site is not set up yet; after the owner sets it and the previews are redeployed, the right code opens the site with the toolbar in a corner.
-- **A comment:** turn on annotate mode (the pencil, or ⌥C), click an element, write a comment and save it. Reload: the pin is still on that element, and the comment is in the list (⌥L).
+- **A comment:** press **C** (or click the pencil), click an element, write a comment and save it. Reload: the pin is still on that element, and the comment is in the list (⌥L).
+- **The shortcut:** C starts commenting and Escape stops. C does nothing while you type in an input, textarea or editable text, or with Cmd, Ctrl or Alt held, so it never fights the app's own fields or copy and paste.
+- **Only one toolbar:** turn Vercel's own toolbar off, so reviewers see one comment tool, not two: Vercel → the project → Settings → General → Vercel Toolbar → Preview: Off (the project's `enablePreviewFeedback: false` in the API).
 - **Per build:** comments on a pull request's preview are tagged `pr-<n>`; the review branch's comments are tagged `review`.
 
 ## 7. How comments get addressed
