@@ -105,12 +105,14 @@ function persistDraft(d: Draft) {
   }
 }
 
-function isTypingTarget(t: EventTarget | null): boolean {
-  if (!(t instanceof Element)) return false;
-  const tag = t.tagName;
-  return (
-    tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t as HTMLElement).isContentEditable
-  );
+/** True when the key went to a field the person is typing in. Reads the event's
+ * real target (inside a shadow root too), and checks by shape rather than
+ * `instanceof`, so keys from the app's frame (another realm) count as well. */
+function isTypingTarget(e: KeyboardEvent): boolean {
+  const t = (e.composedPath?.()[0] ?? e.target) as (Partial<HTMLElement> & { tagName?: unknown }) | null;
+  if (!t || typeof t.tagName !== 'string') return false;
+  const tag = t.tagName.toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable === true;
 }
 
 /* ---------------------------------------------------------------- pin layer */
@@ -841,7 +843,7 @@ function Bubble({
       )}
       <button
         type="button"
-        title={annotate ? 'Stop commenting (⌥C)' : 'Comment: click any element (⌥C)'}
+        title={annotate ? 'Stop commenting (Esc)' : 'Comment: click any element (C)'}
         aria-label={annotate ? 'Exit annotate mode' : 'Enter annotate mode'}
         onClick={onToggleMode}
         style={{
@@ -2659,10 +2661,23 @@ function ToolbarBody({
       return 'annotate';
     });
   }, []);
+  // C only ever starts commenting; pressing it again in annotate mode keeps it on.
+  const startAnnotate = useCallback(() => {
+    setMode((m) => {
+      if (m === 'annotate') return m;
+      if (!storedName()) {
+        setAskName(true);
+        return m;
+      }
+      return 'annotate';
+    });
+  }, []);
 
-  // ⌥C toggles annotate mode, ⌥L the comment list, Escape leaves annotate —
-  // in the toolbar's window and the app's, when the app has its own (a frame). Chords instead of bare letters: plain typing or a
-  // stray keypress while browsing can never trigger them.
+  // C starts commenting (annotate mode), ⌥C toggles it, ⌥L the comment list,
+  // Escape leaves annotate. They work in the toolbar's window and in the app's,
+  // when the app has its own (a frame). Bare C is ignored while typing in a
+  // field, with Cmd, Ctrl or Alt held, on key repeat, and when the app already
+  // handled the key itself.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Escape and the chords would unmount the dialog that owns the recording.
@@ -2678,10 +2693,15 @@ function ToolbarBody({
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isTypingTarget(e.target)) return;
+      if (isTypingTarget(e)) return;
       if (e.key === 'Escape') {
         setPending(null);
         setMode('view');
+        return;
+      }
+      if ((e.key === 'c' || e.key === 'C') && !e.repeat && !e.isComposing && !e.defaultPrevented) {
+        e.preventDefault();
+        startAnnotate();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -2710,7 +2730,7 @@ function ToolbarBody({
         /* gone with the frame */
       }
     };
-  }, [host, toggleMode]);
+  }, [host, toggleMode, startAnnotate]);
 
   // Clicking a selected element again unselects it; a new one joins the comment.
   const addAnchor = useCallback((a: Anchor) => {
