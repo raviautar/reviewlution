@@ -10,6 +10,8 @@ browser ──► review-toolbar (:8090) ──► your app (UPSTREAM)
 
 A top-level page load of any app path gets the shell; the shell iframes the same path, and in-app navigation is mirrored to the address bar. The app never sees the toolbar's code.
 
+**Adding it to a Next.js site on Vercel?** [docs/setup-new-project.md](docs/setup-new-project.md) sets up the toolbar inside the app on every preview build and on a review subdomain served from a `review` branch, behind a code page, and never on production.
+
 ## What reviewers get
 
 - Annotate mode (pencil, or ⌥C): hover outlines the element under the cursor in pink with its name; click drops a numbered pin that stays glued to that element through scrolling, layout changes and re-renders.
