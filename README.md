@@ -71,7 +71,8 @@ Images are published to `ghcr.io/raviautar/review-toolbar:<sha>` on every push t
 
 All under `/__review/api`:
 
-- `GET /comments` — every comment (`?page=/path` filters). A comment carries `text`, `author`, `page`, `anchor` (selector, offsets, element identity), `images`, `resolved`, `replies`.
+- `GET /comments` — every comment (`?page=/path` filters). A comment carries `text`, `author`, `page`, `anchors`, `images`, `resolved`, `replies`.
+- **Read `anchors` for what a comment is about.** One comment can be about several elements: `anchors` lists every one the reviewer selected, in order, each with its selector, offsets and element identity. `anchor` is only the first, so an agent that reads `anchor` alone misses the rest. reviewlution 0.1.3 returns `anchors` on every comment; when a comment has no `anchors` (servers before 0.1.3 leave it out on one-element comments), it is about `anchor` alone, or no element when that is missing too.
 - `POST /comments`, `PATCH /comments/:id` (any field; `page` only together with a new `anchor`), `DELETE /comments/:id`.
 - `POST /comments/:id/replies` `{text, author}`, `DELETE /comments/:id/replies/:rid`.
 - `POST /images` (raw image body) → `{url}`; `GET /images/:name`.

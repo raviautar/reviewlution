@@ -534,7 +534,7 @@ Comments are work orders. The working rule: whoever fixes what a comment flags s
 
 The API, under `/__review/api` on the preview (with the code cookie, or `Authorization: Bearer <REVIEW_AGENT_TOKEN>`):
 
-- `GET /comments?build=review` lists the review site's comments; `?page=/path` filters by page. Each has `text`, `author`, `page`, `anchor` (the element), `images`, `videos`, `resolved` and `replies`.
+- `GET /comments?build=review` lists the review site's comments; `?page=/path` filters by page. Each has `text`, `author`, `page`, `anchors` (every element the comment is about, in order), `images`, `videos`, `resolved` and `replies`. Read `anchors`, not `anchor`: `anchor` is only the first element. When a comment has no `anchors` (servers before 0.1.3 leave it out on one-element comments), it is about `anchor` alone.
 - `POST /comments/:id/replies` with `{"text", "author"}` answers in the thread.
 - `PATCH /comments/:id` with `{"resolved": true}` resolves it.
 - `GET /images/:name` and `GET /videos/:name` fetch attachments.
