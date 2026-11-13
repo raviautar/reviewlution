@@ -125,6 +125,94 @@ test('a second base path reaches the same API; files are linked under the first'
   assert.equal((await api.GET(new Request('http://test/elsewhere/comments'))).status, 404);
 });
 
+test('every comment the API returns lists all its elements under anchors, anchor first', async () => {
+  const file = join(dir, 'anchors', 'comments.json');
+  const api = createReviewHandler({ store: fileStore(file) });
+  const call = async (path, init = {}) => {
+    const res = await api.handle(new Request(`http://test/__review/api${path}`, init));
+    const text = await res.text();
+    return { status: res.status, body: text ? JSON.parse(text) : null };
+  };
+  const send = (method, path, body) => call(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const listed = async (path = '/comments') => Object.fromEntries((await call(path)).body.map((c) => [c.id, c]));
+  const el = (name) => ({ selector: `#${name}`, ox: 0.5, oy: 0.5, element: { tag: 'div', id: name } });
+  const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(el);
+
+  // As the toolbar saves them from 0.1.3: several elements, one, none.
+  assert.equal((await send('POST', '/comments', comment('multi', { anchor: a, anchors: [a, b, c] }))).status, 201);
+  assert.equal((await send('POST', '/comments', comment('one', { anchor: b, anchors: [b] }))).status, 201);
+  assert.equal((await send('POST', '/comments', comment('empty', { anchors: [] }))).status, 201);
+  // As earlier toolbars saved them: one element under `anchor` only, or nothing at all.
+  const r = await send('POST', '/comments', comment('single', { anchor: a }));
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.body.anchors, [a]);
+  assert.equal((await send('POST', '/comments', comment('bare'))).status, 201);
+  // A pin about several elements that an earlier toolbar dragged: a new `anchor` that `anchors` lacks.
+  assert.equal((await send('POST', '/comments', comment('dragged', { anchor: d, anchors: [a, b] }))).status, 201);
+
+  let got = await listed();
+  assert.deepEqual(got.multi.anchors, [a, b, c]);
+  assert.deepEqual(got.multi.anchor, a);
+  assert.deepEqual(got.one.anchors, [b]);
+  assert.deepEqual(got.one.anchor, b);
+  assert.deepEqual(got.single.anchors, [a]);
+  assert.deepEqual(got.single.anchor, a);
+  for (const id of ['empty', 'bare']) {
+    assert.deepEqual(got[id].anchors, []);
+    assert.equal('anchor' in got[id], false);
+  }
+  assert.deepEqual(got.dragged.anchors, [d, a, b]);
+  assert.deepEqual(got.dragged.anchor, d);
+  // Only the response is filled in; the stored documents are as they were sent.
+  const saved = Object.fromEntries(JSON.parse(await readFile(file, 'utf8')).map((x) => [x.id, x]));
+  assert.equal('anchors' in saved.single, false);
+  assert.equal('anchors' in saved.bare, false);
+  assert.deepEqual(saved.dragged.anchors, [a, b]);
+
+  // `anchor` alone (a pin moved by an earlier toolbar) replaces the first element and keeps the others.
+  let p = await send('PATCH', '/comments/multi', { anchor: d, x: 1, y: 2, page: '/moved' });
+  assert.equal(p.status, 200);
+  assert.deepEqual(p.body.anchors, [d, b, c]);
+  assert.deepEqual(p.body.anchor, d);
+  assert.equal(p.body.page, '/moved');
+  got = await listed();
+  assert.deepEqual(got.multi.anchors, [d, b, c]);
+  assert.deepEqual(got.multi.anchor, d);
+  // `anchors` sets the elements; `anchor` follows as the first.
+  p = await send('PATCH', '/comments/multi', { anchors: [c, a] });
+  assert.deepEqual(p.body.anchors, [c, a]);
+  assert.deepEqual(p.body.anchor, c);
+  // Editing the text leaves the elements alone.
+  p = await send('PATCH', '/comments/multi', { text: 'edited' });
+  assert.deepEqual(p.body.anchors, [c, a]);
+  // A single-element pin moved: the new element replaces it.
+  p = await send('PATCH', '/comments/single', { anchor: c });
+  assert.deepEqual(p.body.anchors, [c]);
+  // null takes a comment off its elements.
+  p = await send('PATCH', '/comments/one', { anchor: null });
+  assert.deepEqual(p.body.anchors, []);
+  assert.equal('anchor' in p.body, false);
+  assert.equal('anchor' in (await listed()).one, false);
+  // Malformed anchors are refused, never half-stored.
+  assert.equal((await send('PATCH', '/comments/multi', { anchors: 'a' })).status, 400);
+  assert.equal((await send('PATCH', '/comments/multi', { anchors: [a, {}] })).status, 400);
+  assert.equal((await send('POST', '/comments', comment('bad', { anchor: 'a' }))).status, 400);
+  assert.deepEqual((await listed()).multi.anchors, [c, a]);
+
+  // A reply, a delete and a restore keep every element.
+  p = await send('POST', '/comments/multi/replies', { text: 'on it' });
+  assert.deepEqual(p.body.anchors, [c, a]);
+  assert.equal((await call('/comments/multi', { method: 'DELETE' })).status, 204);
+  assert.equal((await call('/comments/single', { method: 'DELETE' })).status, 204);
+  got = await listed('/deleted');
+  assert.deepEqual(got.multi.anchors, [c, a]);
+  assert.deepEqual(got.single.anchors, [c]);
+  p = await send('POST', '/comments/multi/restore', {});
+  assert.equal(p.status, 201);
+  assert.deepEqual(p.body.anchors, [c, a]);
+  assert.deepEqual(p.body.anchor, c);
+});
+
 test('the iframe shell server serves the same API through Fastify', async () => {
   const port = 18000 + Math.floor(Math.random() * 2000);
   const server = spawn(process.execPath, ['server.mjs'], {

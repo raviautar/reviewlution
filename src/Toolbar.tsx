@@ -37,6 +37,7 @@ import {
 } from './anchors.js';
 import { reportError, setReporter, type EventKind } from './events.js';
 import { HostContext, useHost, type Host } from './host.js';
+import { anchorsOf } from './types.js';
 import { RecordButton } from './RecordButton.js';
 import { SnapButton } from './SnapButton.js';
 import { ChatIcon, CloseIcon, GripIcon, ImagePlusIcon, PencilIcon } from './icons.js';
@@ -121,9 +122,6 @@ type PinPos = { id: string; n: number; x: number; y: number; resolved: boolean; 
 /** Where a comment stands right now: its element is on this screen, gone from it
  * (the pin falls back to the original click spot), or on another page. */
 type PinStatus = 'here' | 'missing' | 'elsewhere';
-
-const anchorsOf = (c: ReviewComment): Anchor[] =>
-  c.anchors?.length ? c.anchors : c.anchor ? [c.anchor] : [];
 
 /** A short human name for an anchored element: its tag plus the text or label it carried. */
 function anchorLabel(a: Anchor): string {
@@ -351,7 +349,8 @@ function PinLayer({
         ? pending.anchors.map((a, i) => ({ a, key: `__pending|${i}` }))
         : (() => {
             const c = hoverId ? comments.find((x) => x.id === hoverId) : undefined;
-            return (c?.anchors ?? []).map((a, i) => ({ a, key: `${c?.id}|multi|${i}` }));
+            const all = c ? anchorsOf(c) : [];
+            return all.length > 1 ? all.map((a, i) => ({ a, key: `${c?.id}|multi|${i}` })) : [];
           })();
       const sel: Outline[] = [];
       for (const { a, key } of group) {
@@ -399,9 +398,18 @@ function PinLayer({
     setDrag(null);
     const doc = host.doc();
     const anchor = doc ? anchorAt(doc, e.clientX, e.clientY) : null;
-    if (!anchor) return;
+    if (!doc || !anchor) return;
+    // On a pin about several elements, the dragged one is the element the pin
+    // sat on (the first found on this screen, as placed; else the first): it
+    // is replaced, the others stay, and the new one goes first so the pin
+    // lands where it was dropped.
+    const c = comments.find((x) => x.id === id);
+    const had = c ? anchorsOf(c) : [];
+    const on = had.find((a) => resolveAnchor(doc, a, cache.current, `${id}|${a.selector}`)) ?? had[0];
+    const anchors = [anchor, ...had.filter((a) => a !== on && a.selector !== anchor.selector)];
     onMove(id, {
       anchor,
+      anchors,
       x: (e.clientX / window.innerWidth) * 100,
       y: (e.clientY / window.innerHeight) * 100,
       page: route,
@@ -492,7 +500,12 @@ function PinLayer({
         }
         for (const el of found) {
           if (have.some((h) => h.el && (h.el === el || h.el.contains(el)))) continue;
-          onAddAnchor(anchorFor(el));
+          const a = anchorFor(el);
+          // A box only adds: an element already selected stays selected even
+          // when it was not found on screen to compare against (adding it
+          // again would unselect it).
+          if (have.some((h) => h.a.selector === a.selector)) continue;
+          onAddAnchor(a);
         }
         return;
       }
@@ -1332,7 +1345,7 @@ function Sidebar({
       ];
       // Where the pin sits, in terms an agent can find in the codebase.
       const where: string[] = [];
-      const anchors = c.anchors?.length ? c.anchors : c.anchor ? [c.anchor] : [];
+      const anchors = anchorsOf(c);
       for (const [i, a] of anchors.entries()) {
         const el = a.element;
         const nth = anchors.length > 1 ? ` ${i + 1}/${anchors.length}` : '';
@@ -2762,8 +2775,9 @@ function ToolbarBody({
       page: pending.page,
       images: draft.images.length ? draft.images : undefined,
       videos: draft.videos.length ? draft.videos : undefined,
-      anchor: pending.anchor ?? undefined,
-      anchors: pending.anchors.length > 1 ? pending.anchors : undefined,
+      // Every selected element, one or none included; `anchor` is the first, for older readers.
+      anchor: pending.anchors[0],
+      anchors: pending.anchors,
       viewport: captureViewport(host.win() ?? window),
     };
     await createComment(c);

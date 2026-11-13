@@ -10,6 +10,8 @@
  * one prefix (a rewrite). The first is the public one: attachment URLs it
  * hands out start with it.
  */
+import type { Anchor } from '../anchors.js';
+import { anchorsOf } from '../types.js';
 import type { FileKind, ReviewComment, ReviewEvent, Store } from './store.js';
 
 export interface ReviewHandlerOptions {
@@ -84,6 +86,31 @@ function clientEvent(body: Record<string, unknown>, req: Request): ReviewEvent |
     stack: clip(body.stack, 8000),
     context,
   };
+}
+
+/**
+ * A comment as the API returns it: `anchors` lists every element it is about
+ * (`[]` for none) and `anchor` is the first, whatever version of the toolbar
+ * saved it. Only the response changes; the stored document stays as it is.
+ */
+function withAnchors<T extends ReviewComment>(c: T): T {
+  const anchors = anchorsOf(c);
+  const out: T = { ...c, anchors };
+  if (anchors[0]) out.anchor = anchors[0];
+  else delete out.anchor;
+  return out;
+}
+
+const isAnchor = (a: unknown): boolean =>
+  !!a && typeof a === 'object' && !Array.isArray(a) && typeof (a as { selector?: unknown }).selector === 'string';
+
+/** Why a body's `anchor` or `anchors` cannot be stored; null when they can (absent or null is fine). */
+function badAnchors(body: Record<string, unknown>): string | null {
+  if (body.anchor != null && !isAnchor(body.anchor)) return 'anchor must be an element anchor with a selector';
+  if (body.anchors != null && !(Array.isArray(body.anchors) && body.anchors.every(isAnchor))) {
+    return 'anchors must be a list of element anchors, each with a selector';
+  }
+  return null;
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
@@ -232,7 +259,7 @@ export function createReviewHandler({
     }
 
     if (head === 'deleted' && parts.length === 1 && method === 'GET') {
-      return json(await store.listDeleted({ build: url.searchParams.get('build') || undefined }));
+      return json((await store.listDeleted({ build: url.searchParams.get('build') || undefined })).map(withAnchors));
     }
 
     if (head === 'events' && parts.length === 1) {
@@ -255,21 +282,22 @@ export function createReviewHandler({
 
     if (parts.length === 1) {
       if (method === 'GET') {
-        return json(
-          await store.list({
-            page: url.searchParams.get('page') || undefined,
-            build: url.searchParams.get('build') || undefined,
-          }),
-        );
+        const list = await store.list({
+          page: url.searchParams.get('page') || undefined,
+          build: url.searchParams.get('build') || undefined,
+        });
+        return json(list.map(withAnchors));
       }
       if (method === 'POST') {
         const c = (await req.json().catch(() => null)) as ReviewComment | null;
         if (!c || typeof c.id !== 'string' || typeof c.text !== 'string' || typeof c.x !== 'number' || typeof c.y !== 'number') {
           return json({ error: 'id, text, x and y are required' }, 400);
         }
+        const bad = badAnchors(c as unknown as Record<string, unknown>);
+        if (bad) return json({ error: bad }, 400);
         if ((await store.create(c)) === 'duplicate') return json({ error: 'duplicate id' }, 409);
         await journal('create', c);
-        return json(c, 201);
+        return json(withAnchors(c), 201);
       }
       return notFound();
     }
@@ -281,12 +309,29 @@ export function createReviewHandler({
         // id is identity. page only changes together with a new anchor — dragging a
         // pin onto another element — never as a side effect of editing the text.
         const body = ((await req.json().catch(() => null)) ?? {}) as Record<string, unknown>;
+        const bad = badAnchors(body);
+        if (bad) return json({ error: bad }, 400);
         const { id: _id, page, ...updates } = body;
-        if (updates.anchor && typeof page === 'string') updates.page = page;
+        if ('anchor' in updates || 'anchors' in updates) {
+          // `anchor` and `anchors` always change together. `anchors` sets the
+          // elements; `anchor` alone (a toolbar before 0.1.3 moving a pin)
+          // replaces the first and keeps the others; null clears them.
+          const sent = updates as { anchor?: Anchor | null; anchors?: Anchor[] | null };
+          const anchors =
+            'anchors' in sent
+              ? anchorsOf(sent)
+              : sent.anchor
+                ? anchorsOf({ anchor: sent.anchor, anchors: anchorsOf(existing).slice(1) })
+                : [];
+          updates.anchors = anchors;
+          updates.anchor = anchors[0] ?? null;
+          if (anchors.length && typeof page === 'string') updates.page = page;
+        }
         const next = { ...existing, ...updates } as ReviewComment;
+        if (next.anchor === null) delete next.anchor;
         await store.update(next);
         await journal('update', { id, updates });
-        return json(next);
+        return json(withAnchors(next));
       }
       if (method === 'DELETE') {
         const removed = await store.softDelete(id);
@@ -313,7 +358,7 @@ export function createReviewHandler({
       c.replies = [...(c.replies ?? []), reply];
       await store.update(c);
       await journal('reply', { id: c.id, reply });
-      return json(c, 201);
+      return json(withAnchors(c), 201);
     }
 
     if (sub === 'replies' && parts.length === 4 && method === 'DELETE') {
@@ -332,7 +377,7 @@ export function createReviewHandler({
       const r = await store.restore(id);
       if (r.status !== 'restored') return r.status === 'missing' ? notFound() : json({ error: 'already present' }, 409);
       await journal('restore', r.comment);
-      return json(r.comment, 201);
+      return json(withAnchors(r.comment), 201);
     }
 
     return notFound();
