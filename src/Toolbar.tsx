@@ -904,6 +904,15 @@ function Bubble({
 
 /* ------------------------------------------------------- the create dialog */
 
+/** A phone: a touch screen whose short side is under 640px. */
+function onPhone(): boolean {
+  try {
+    return window.matchMedia('(pointer: coarse)').matches && Math.min(window.innerWidth, window.innerHeight) < 640;
+  } catch {
+    return false;
+  }
+}
+
 function CreateDialog({
   pending,
   draft,
@@ -965,6 +974,14 @@ function CreateDialog({
     }
   };
 
+  // On a phone the box covers much of the screen, and a tap on an element
+  // under it would land on the box. So there the comment starts as a bar at
+  // the edge away from the first element: taps on the page add elements (or
+  // drop a selected one), Write opens the box, and the box's "Add more
+  // elements" goes back to the bar. Elsewhere the box opens straight away.
+  const phone = useMemo(onPhone, []);
+  const [selecting, setSelecting] = useState(phone);
+
   const left = Math.min(Math.max(pending.cx, 12), window.innerWidth - 332);
   const wanted = Math.min(Math.max(pending.cy + 14, 12), window.innerHeight - 320);
   // The box grows with its selection and attachments, so it is measured after
@@ -976,8 +993,76 @@ function CreateDialog({
     if (!el) return;
     const over = el.getBoundingClientRect().height + wanted - (window.innerHeight - 12);
     setLift(over > 0 ? Math.min(over, wanted - 12) : 0);
-  }, [wanted, pending.anchors.length, draft.images.length, draft.videos.length, error]);
+  }, [wanted, selecting, pending.anchors.length, draft.images.length, draft.videos.length, error]);
   const top = wanted - lift;
+  const count = pending.anchors.length === 1 ? '1 element' : `${pending.anchors.length} elements`;
+
+  if (selecting) {
+    const atTop = pending.cy > window.innerHeight / 2;
+    return (
+      <div
+        role="dialog"
+        aria-label="Add comment: selecting elements"
+        style={{
+          position: 'fixed',
+          left: 8,
+          right: 8,
+          ...(atTop
+            ? { top: 'calc(8px + env(safe-area-inset-top, 0px))' }
+            : { bottom: 'calc(8px + env(safe-area-inset-bottom, 0px))' }),
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          boxSizing: 'border-box',
+          background: '#fff',
+          border: '1px solid #e3e1ec',
+          borderRadius: 14,
+          boxShadow: '0 18px 50px -18px rgba(20,20,30,.4)',
+          padding: '7px 7px 7px 14px',
+          zIndex: 2147483050,
+        }}
+      >
+        <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#1b1926', lineHeight: 1.3 }}>
+          <b>{count}</b>
+          <span style={{ color: '#8a879a' }}> · tap the page to add or remove</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => setSelecting(false)}
+          style={{
+            border: 'none',
+            background: ACCENT,
+            color: '#fff',
+            borderRadius: 9,
+            height: 32,
+            padding: '0 14px',
+            fontSize: 12.5,
+            fontWeight: 600,
+            cursor: 'pointer',
+            flexShrink: 0,
+          }}
+        >
+          {draft.text.trim() ? 'Continue' : 'Write'}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close (your draft is kept)"
+          style={{
+            border: 'none',
+            background: 'transparent',
+            color: '#8a879a',
+            cursor: 'pointer',
+            padding: 6,
+            display: 'inline-flex',
+            flexShrink: 0,
+          }}
+        >
+          <CloseIcon size={13} />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1017,7 +1102,7 @@ function CreateDialog({
           <CloseIcon size={13} />
         </button>
       </div>
-      {pending.anchors.length > 0 && (
+      {(pending.anchors.length > 0 || phone) && (
         <div
           style={{
             display: 'flex',
@@ -1029,10 +1114,30 @@ function CreateDialog({
             paddingRight: 2,
           }}
         >
-          <span style={{ width: '100%', fontSize: 11, color: '#8a879a', marginBottom: 2 }}>
-            {pending.anchors.length === 1 ? '1 element' : `${pending.anchors.length} elements`} · click
-            more or drag a box to add
-          </span>
+          {phone ? (
+            <span style={{ width: '100%', fontSize: 11, color: '#8a879a', marginBottom: 2 }}>
+              {count} ·{' '}
+              <button
+                type="button"
+                onClick={() => setSelecting(true)}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: ACCENT,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '4px 0',
+                  cursor: 'pointer',
+                }}
+              >
+                Add more elements
+              </button>
+            </span>
+          ) : (
+            <span style={{ width: '100%', fontSize: 11, color: '#8a879a', marginBottom: 2 }}>
+              {count} · click more or drag a box to add
+            </span>
+          )}
           {pending.anchors.map((a, i) => (
             <span
               key={`${a.selector}|${i}`}
